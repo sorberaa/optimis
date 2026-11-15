@@ -1,0 +1,134 @@
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from typing import List, Dict, Any
+
+def main_menu_keyboard(is_chat: bool = False) -> InlineKeyboardMarkup:
+    """Главное меню бота."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="⚔️ Создать дуэль", callback_data="menu_duels"),
+            InlineKeyboardButton(text="🎲 Игра против бота", callback_data="menu_solo")
+        ],
+        [
+            InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile"),
+            InlineKeyboardButton(text="🎁 Бонус дня", callback_data="bonus")
+        ],
+        [
+            InlineKeyboardButton(text="🛍 Магазин статусов", callback_data="shop"),
+            InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top_balance")
+        ],
+        [
+            InlineKeyboardButton(text="📜 Правила и помощь", callback_data="help")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def games_selection_keyboard(mode: str = "duel") -> InlineKeyboardMarkup:
+    """
+    Выбор игры.
+    mode: 'duel' (для вызова игрока) или 'solo' (для одиночной игры против бота)
+    """
+    prefix = "duel_game" if mode == "duel" else "solo_game"
+    buttons = [
+        [
+            InlineKeyboardButton(text="⚽ Футбол", callback_data=f"{prefix}:football"),
+            InlineKeyboardButton(text="🏀 Баскетбол", callback_data=f"{prefix}:basketball")
+        ],
+        [
+            InlineKeyboardButton(text="🎯 Дартс", callback_data=f"{prefix}:darts"),
+            InlineKeyboardButton(text="🎳 Боулинг", callback_data=f"{prefix}:bowling")
+        ],
+        [
+            InlineKeyboardButton(text="🎲 Кости", callback_data=f"{prefix}:dice"),
+            InlineKeyboardButton(text="🎰 Слоты 777", callback_data=f"{prefix}:slots")
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_main")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def bet_selection_keyboard(mode: str, game_type: str, user_balance: int) -> InlineKeyboardMarkup:
+    """Выбор ставки для выбранной игры."""
+    bets = [25, 50, 100, 250, 500]
+    row1 = []
+    row2 = []
+
+    for b in bets[:3]:
+        row1.append(InlineKeyboardButton(text=f"{b} 🪙", callback_data=f"set_bet:{mode}:{game_type}:{b}"))
+    for b in bets[3:]:
+        row2.append(InlineKeyboardButton(text=f"{b} 🪙", callback_data=f"set_bet:{mode}:{game_type}:{b}"))
+
+    # Кнопка Ва-банк (если баланс больше 0)
+    all_in_btn = []
+    if user_balance > 0:
+        all_in_btn.append(InlineKeyboardButton(text=f"🔥 Ва-банк ({user_balance} 🪙)", callback_data=f"set_bet:{mode}:{game_type}:{user_balance}"))
+
+    buttons = [
+        row1,
+        row2,
+        all_in_btn,
+        [InlineKeyboardButton(text="⬅️ Назад к играм", callback_data=f"menu_{mode}")]
+    ]
+    # фильтруем пустые строки
+    buttons = [r for r in buttons if r]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def duel_invitation_keyboard(duel_id: int, bet: int) -> InlineKeyboardMarkup:
+    """Кнопки в сообщении активной дуэли."""
+    buttons = [
+        [
+            InlineKeyboardButton(text=f"⚔️ Принять вызов ({bet} 🪙)", callback_data=f"accept_duel:{duel_id}")
+        ],
+        [
+            InlineKeyboardButton(text="❌ Отменить дуэль", callback_data=f"cancel_duel:{duel_id}")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def shop_keyboard(items: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Клавиатура магазина Optimus Gang."""
+    buttons = []
+    for item in items:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{item['title']} — {item['price']} 🪙",
+                callback_data=f"shop_buy:{item['id']}"
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="🎒 Мой титул", callback_data="my_purchases"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def profile_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки в окне профиля."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="🎁 Забрать бонус", callback_data="bonus"),
+            InlineKeyboardButton(text="🛍 В магазин", callback_data="shop")
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def top_keyboard() -> InlineKeyboardMarkup:
+    """Переключение топа (по балансу / по победам)."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="💰 По балансу", callback_data="top_balance"),
+            InlineKeyboardButton(text="🏆 По победам", callback_data="top_wins")
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def back_to_menu_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка возврата в главное меню."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")]
+    ])
