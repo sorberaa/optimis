@@ -13,8 +13,11 @@ def main_menu_keyboard(is_chat: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🎁 Бонус дня", callback_data="bonus")
         ],
         [
-            InlineKeyboardButton(text="🛍 Магазин статусов", callback_data="shop"),
+            InlineKeyboardButton(text="🛍 Магазин приколов", callback_data="shop"),
             InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top_balance")
+        ],
+        [
+            InlineKeyboardButton(text="🐉 Вырастить дракона", callback_data="dragon")
         ],
         [
             InlineKeyboardButton(text="📜 Правила и помощь", callback_data="help")
@@ -96,7 +99,7 @@ def shop_keyboard(items: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
             )
         ])
     buttons.append([
-        InlineKeyboardButton(text="🎒 Мой титул", callback_data="my_purchases"),
+        InlineKeyboardButton(text="🎒 Мои эффекты", callback_data="my_purchases"),
         InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -106,7 +109,8 @@ def profile_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [
             InlineKeyboardButton(text="🎁 Забрать бонус", callback_data="bonus"),
-            InlineKeyboardButton(text="🛍 В магазин", callback_data="shop")
+            InlineKeyboardButton(text="🛍 В магазин", callback_data="shop"),
+            InlineKeyboardButton(text="🐉 Дракон", callback_data="dragon")
         ],
         [
             InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")

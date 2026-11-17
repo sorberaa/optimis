@@ -3,13 +3,13 @@ import logging
 import os
 import sys
 from aiohttp import web
-from aiogram import Bot, Dispatcher
+from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, CallbackQuery, Message
 
 from config import BOT_TOKEN, SHOP_NAME
-from database import init_db
+from database import init_db, is_account_banned
 from handlers import main_router
 
 # Настройка логирования
@@ -23,31 +23,41 @@ logging.basicConfig(
 logger = logging.getLogger("OptimusGangBot")
 
 async def health_check(request):
-    """Заглушка для Render и UptimeRobot."""
     return web.Response(text="Optimus Gang Bot is alive and running!")
 
-async def start_dummy_server():
-    """Запуск мини-вебсервера на порту, который выдает Render."""
+async def start_health_server():
     app = web.Application()
     app.router.add_get("/", health_check)
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    # Render автоматически передает нужный порт в переменную окружения PORT
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"🌐 Веб-сервер для Render запущен на порту {port}")
+    logger.info("Веб-сервер проверки состояния запущен на порту %s", port)
+    return runner
+
+class AccountBanMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user and await is_account_banned(user.id):
+            if isinstance(event, Message):
+                await event.answer("⛔ Ваш игровой аккаунт заблокирован.")
+            elif isinstance(event, CallbackQuery):
+                await event.answer("⛔ Ваш игровой аккаунт заблокирован.", show_alert=True)
+            return None
+        return await handler(event, data)
 
 async def set_bot_commands(bot: Bot):
     """Установка подсказок команд в меню Telegram."""
     commands = [
         BotCommand(command="start", description="🏠 Главное меню"),
         BotCommand(command="duel", description="⚔️ Создать дуэль на ставку"),
-        BotCommand(command="roulette", description="🎰 Запустить рулетку/игру"),
+        BotCommand(command="roulette", description="🎰 Создать рулетку"),
         BotCommand(command="list_game", description="📋 Запустить игру по списку"),
         BotCommand(command="profile", description="👤 Мой профиль и баланс"),
         BotCommand(command="shop", description="🛍 Магазин Optimus Gang"),
+        BotCommand(command="dragon", description="🐉 Вырастить дракона"),
+        BotCommand(command="dragon_name", description="🏷 Переименовать дракона"),
         BotCommand(command="bonus", description="🎁 Забрать ежедневный бонус"),
         BotCommand(command="top", description="🏆 Зал славы игроков"),
         BotCommand(command="admin", description="👑 Панель управления"),
@@ -62,12 +72,10 @@ async def main():
 
     logger.info(f"🚀 Запуск бота для клуба и магазина «{SHOP_NAME}»...")
 
-    # Запуск фонового веб-сервера для Render
-    await start_dummy_server()
-
     # Инициализация базы данных SQLite
     await init_db()
     logger.info("📦 База данных SQLite успешно инициализирована.")
+    health_server = await start_health_server()
 
     # Создание экземпляра бота
     bot = Bot(
@@ -76,6 +84,9 @@ async def main():
     )
 
     dp = Dispatcher()
+    account_ban_middleware = AccountBanMiddleware()
+    dp.message.outer_middleware(account_ban_middleware)
+    dp.callback_query.outer_middleware(account_ban_middleware)
     dp.include_router(main_router)
 
     # Установка меню команд
@@ -92,6 +103,7 @@ async def main():
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
+        await health_server.cleanup()
 
 if __name__ == "__main__":
     try:

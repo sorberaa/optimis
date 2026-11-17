@@ -1,8 +1,10 @@
+import html
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from config import SHOP_NAME
-from database import get_or_create_user, claim_daily_bonus, get_top_players, get_user_badge
+from database import get_or_create_user, claim_daily_bonus, get_top_players, get_user_decorations
 from keyboards.inline import profile_keyboard, top_keyboard, back_to_menu_keyboard
 
 router = Router()
@@ -10,8 +12,13 @@ router = Router()
 @router.message(Command("profile", "me", "stats"))
 async def cmd_profile(message: Message):
     user = await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-    badge = await get_user_badge(message.from_user.id)
-    badge_text = f"Титул: <b>{badge}</b>\n" if badge else ""
+    decorations = await get_user_decorations(message.from_user.id)
+    badge_text = f"Титул: <b>{decorations['badge']}</b>\n" if decorations["badge"] else ""
+    aura_text = f"Аура: <b>{decorations['aura']}</b>\n" if decorations["aura"] else ""
+    nickname_text = (
+        f"Игровой ник: <b>{html.escape(user['nickname'])}</b>\n"
+        if user.get("nickname") else ""
+    )
 
     total = user["total_games"]
     wins = user["wins"]
@@ -19,7 +26,9 @@ async def cmd_profile(message: Message):
 
     text = (
         f"👤 <b>Профиль:</b> {message.from_user.mention_html()}\n"
+        f"{nickname_text}"
         f"{badge_text}"
+        f"{aura_text}"
         f"💰 <b>Баланс:</b> <code>{user['balance']}</code> 🪙\n"
         f"🏆 <b>Игры:</b> {total} (Побед: {wins} | Винрейт: {winrate}%)"
     )
@@ -28,8 +37,13 @@ async def cmd_profile(message: Message):
 @router.callback_query(F.data == "profile")
 async def cb_profile(callback: CallbackQuery):
     user = await get_or_create_user(callback.from_user.id, callback.from_user.username, callback.from_user.full_name)
-    badge = await get_user_badge(callback.from_user.id)
-    badge_text = f"Титул: <b>{badge}</b>\n" if badge else ""
+    decorations = await get_user_decorations(callback.from_user.id)
+    badge_text = f"Титул: <b>{decorations['badge']}</b>\n" if decorations["badge"] else ""
+    aura_text = f"Аура: <b>{decorations['aura']}</b>\n" if decorations["aura"] else ""
+    nickname_text = (
+        f"Игровой ник: <b>{html.escape(user['nickname'])}</b>\n"
+        if user.get("nickname") else ""
+    )
 
     total = user["total_games"]
     wins = user["wins"]
@@ -37,7 +51,9 @@ async def cb_profile(callback: CallbackQuery):
 
     text = (
         f"👤 <b>Профиль:</b> {callback.from_user.mention_html()}\n"
+        f"{nickname_text}"
         f"{badge_text}"
+        f"{aura_text}"
         f"💰 <b>Баланс:</b> <code>{user['balance']}</code> 🪙\n"
         f"🏆 <b>Игры:</b> {total} (Побед: {wins} | Винрейт: {winrate}%)"
     )
@@ -47,21 +63,26 @@ async def cb_profile(callback: CallbackQuery):
 @router.message(Command("bonus"))
 async def cmd_bonus(message: Message):
     await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-    success, amount_or_bal, msg = await claim_daily_bonus(message.from_user.id)
+    success, amount_or_bal, msg, streak = await claim_daily_bonus(message.from_user.id)
 
     if success:
-        await message.answer(f"🎁 <b>Бонус получен!</b> +{amount_or_bal} 🪙 на ваш баланс.", parse_mode="HTML")
+        await message.answer(
+            f"🎁 <b>Бонус получен!</b> +{amount_or_bal} 🪙 на ваш баланс.\n"
+            f"🔥 Серия: {streak} дн.",
+            parse_mode="HTML"
+        )
     else:
         await message.answer(f"⏳ Следующий бонус через: <b>{msg}</b>.", parse_mode="HTML")
 
 @router.callback_query(F.data == "bonus")
 async def cb_bonus(callback: CallbackQuery):
     await get_or_create_user(callback.from_user.id, callback.from_user.username, callback.from_user.full_name)
-    success, amount_or_bal, msg = await claim_daily_bonus(callback.from_user.id)
+    success, amount_or_bal, msg, streak = await claim_daily_bonus(callback.from_user.id)
 
     if success:
         await callback.message.edit_text(
-            f"🎁 <b>Бонус получен!</b> +{amount_or_bal} 🪙 на баланс.",
+            f"🎁 <b>Бонус получен!</b> +{amount_or_bal} 🪙 на баланс.\n"
+            f"🔥 Серия: {streak} дн.",
             reply_markup=back_to_menu_keyboard(),
             parse_mode="HTML"
         )
@@ -77,7 +98,7 @@ async def cmd_top(message: Message):
     lines = []
     for i, p in enumerate(players):
         medal = medals[i] if i < len(medals) else f"{i+1}."
-        name = p["username"] if p["username"] else p["full_name"]
+        name = html.escape(p["display_name"])
         lines.append(f"{medal} <b>{name}</b> — <code>{p['balance']}</code> 🪙 (побед: {p['wins']})")
 
     content = "\n".join(lines) if lines else "Пока нет игроков в рейтинге."
@@ -94,7 +115,7 @@ async def cb_top(callback: CallbackQuery):
     lines = []
     for i, p in enumerate(players):
         medal = medals[i] if i < len(medals) else f"{i+1}."
-        name = p["username"] if p["username"] else p["full_name"]
+        name = html.escape(p["display_name"])
         if by == "balance":
             lines.append(f"{medal} <b>{name}</b> — <code>{p['balance']}</code> 🪙")
         else:

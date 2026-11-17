@@ -18,7 +18,8 @@ async def cmd_start(message: Message):
     text = (
         f"🔥 <b>Клуб {SHOP_NAME}</b>\n\n"
         f"👤 {message.from_user.mention_html()} | 💰 Баланс: <code>{user['balance']}</code> 🪙\n\n"
-        f"Игры, рулетки со стикерами и кастомные титулы к нику!\n"
+        f"Игровой аккаунт автоматически привязан к Telegram ID <code>{message.from_user.id}</code>.\n"
+        f"Чат-игры, цифровой магазин и собственный дракон!\n"
         f"Выбирай действие ниже 👇"
     )
     await message.answer(text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
@@ -27,10 +28,12 @@ async def cmd_start(message: Message):
 async def cmd_help(message: Message):
     text = (
         f"📖 <b>Команды {SHOP_NAME}:</b>\n\n"
-        f"• <code>/game</code> или <code>/roulette</code> — рулетка с записью участников\n"
+        f"• <code>/game</code> или <code>/roulette</code> — рулетка; после заполнения мест стартует админ\n"
         f"• <code>/list_game</code> — запустить игру по готовому списку\n"
         f"• <code>/duel</code> — дуэль 1 на 1\n"
-        f"• <code>/shop</code> — магазин титулов к нику\n"
+        f"• <code>/dragon</code> — вырастить дракона\n"
+        f"• <code>/dragon_name имя</code> — переименовать дракона\n"
+        f"• <code>/shop</code> — магазин цифровых приколов\n"
         f"• <code>/profile</code> — профиль и баланс\n"
         f"• <code>/bonus</code> — забрать бонус дня\n"
         f"• <code>/top</code> — топ игроков"
@@ -41,10 +44,11 @@ async def cmd_help(message: Message):
 async def cb_help(callback: CallbackQuery):
     text = (
         f"📖 <b>Команды {SHOP_NAME}:</b>\n\n"
-        f"• <code>/game</code> или <code>/roulette</code> — рулетка с записью по кнопке\n"
+        f"• <code>/game</code> или <code>/roulette</code> — рулетка; после заполнения мест стартует админ\n"
         f"• <code>/list_game</code> — провести игру по готовому списку\n"
         f"• <code>/duel</code> — дуэль 1 на 1 в чате\n"
-        f"• <code>/shop</code> — титулы и стикеры к нику\n"
+        f"• <code>/dragon</code> — вырастить дракона\n"
+        f"• <code>/shop</code> — магазин цифровых приколов\n"
         f"• <code>/bonus</code> — ежедневный бонус"
     )
     await callback.message.edit_text(text, reply_markup=main_menu_keyboard(), parse_mode="HTML")

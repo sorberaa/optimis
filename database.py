@@ -111,32 +111,109 @@ async def init_db():
             )
         """)
 
-        # Добавим колонку badge в users если её ещё нет
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN badge TEXT DEFAULT ''")
-        except Exception:
-            pass
+        # Таблица драконов пользователей
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_dragons (
+                user_id INTEGER PRIMARY KEY,
+                name TEXT DEFAULT 'Огнекрыл',
+                element TEXT DEFAULT '🔥 Огонь',
+                stage INTEGER DEFAULT 1,
+                level INTEGER DEFAULT 1,
+                xp INTEGER DEFAULT 0,
+                energy INTEGER DEFAULT 100,
+                max_energy INTEGER DEFAULT 100,
+                power INTEGER DEFAULT 15,
+                last_fed TIMESTAMP,
+                last_trained TIMESTAMP,
+                last_expedition TIMESTAMP,
+                last_income TIMESTAMP,
+                expeditions_count INTEGER DEFAULT 0,
+                wins_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-        # Обновим товары в магазине: убираем скидки/промокоды, ставим стикеры и приколы к нику
-        await db.execute("DELETE FROM shop_items WHERE item_type = 'promocode'")
+        # Таблица инвентаря предметов
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_inventory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                item_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                quantity INTEGER DEFAULT 1,
+                UNIQUE(user_id, item_key)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS dragon_expedition_cooldowns (
+                user_id INTEGER NOT NULL,
+                expedition TEXT NOT NULL,
+                last_used TIMESTAMP NOT NULL,
+                PRIMARY KEY (user_id, expedition)
+            )
+        """)
+
+        # Добавим колонки декораций и бонусов в users если их ещё нет
+        for col, col_def in [
+            ("badge", "TEXT DEFAULT ''"),
+            ("aura", "TEXT DEFAULT ''"),
+            ("taunt", "TEXT DEFAULT ''"),
+            ("bonus_streak", "INTEGER DEFAULT 1"),
+            ("last_bonus_date", "TEXT DEFAULT ''"),
+            ("nickname", "TEXT DEFAULT ''"),
+            ("is_banned", "INTEGER DEFAULT 0")
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass
+
+        # Товары в магазине: ТОЛЬКО виртуальные приколы внутри бота
+        # Пересоздадим базовый ассортимент если пусто или устарело
+        shop_catalog = [
+            # Титулы и значки к нику
+            ("🕶 [Блатной]", "Прикольный значок к нику в рулетках", 100, "badge", "🕶 [Блатной]"),
+            ("🎯 [Снайпер Gang]", "Стикер меткого стрелка в играх", 180, "badge", "🎯 [Снайпер Gang]"),
+            ("⚽ [Золотая Нога]", "Футбольный статус бомбардира", 220, "badge", "⚽ [Золотая Нога]"),
+            ("🎰 [Фартовый]", "Статус везунчика клуба", 300, "badge", "🎰 [Фартовый]"),
+            ("⚡ [Гроза Рулеток]", "Грозный титул в чат-играх", 450, "badge", "⚡ [Гроза Рулеток]"),
+            ("🐉 [Владыка Драконов]", "Великий титул повелителя драконов", 600, "badge", "🐉 [Владыка Драконов]"),
+            ("💀 [Головорез]", "Опасный боевой статус в чате", 750, "badge", "💀 [Головорез]"),
+            ("👑 [Шеф Gang]", "Высший авторитет Optimus Gang", 1000, "badge", "👑 [Шеф Gang]"),
+
+            # Ауры оформления профиля
+            ("🔥 Огненная Аура", "Пылающая рамка в карточке профиля", 150, "aura", "🔥 [Огненная Аура]"),
+            ("⚡ Неоновый Разряд", "Стильное кибер-свечение профиля", 250, "aura", "⚡ [Неоновый Разряд]"),
+            ("💎 Алмазный Градиент", "Роскошный сверкающий стиль профиля", 400, "aura", "💎 [Алмазный Градиент]"),
+            ("🌌 Космическая Бездна", "Мистическая аура далеких звезд", 550, "aura", "🌌 [Космическая Бездна]"),
+
+            # Победные боевые кличи (насмешки в чат при победе)
+            ("🗣 Клич: «Легчайшая!»", "Бот кричит вашу насмешку при победе", 120, "taunt", "🗣 «Легчайшая для величайшего! Следующий!»"),
+            ("🗣 Клич: «Кто на вылет?»", "Дерзкий победный клич в чате", 160, "taunt", "🗣 «Кто там следующий на вылет из клуба? 😏»"),
+            ("🗣 Клич: «Удача со мной!»", "Победная фраза везунчика", 200, "taunt", "🗣 «Удача любит дерзких, а не пугливых! 😎»"),
+            ("🗣 Клич: «Шеф на связи»", "Фирменный панчлайн клуба Optimus", 300, "taunt", "🗣 «Optimus Gang на связи — остальные отдыхают! 🔥»"),
+
+            # Предметы для дракона
+            ("🥩 Стейк из виверны", "Восстанавливает +50 энергии и +30 XP дракону", 30, "dragon_item", "steak"),
+            ("🧪 Зелье бодрости", "Мгновенно восполняет 100% энергии дракона", 60, "dragon_item", "potion"),
+            ("✨ Кристалл эволюции", "Дарует дракону сразу +150 очков опыта", 120, "dragon_item", "crystal"),
+            ("🛡️ Оберег удачи", "На одну экспедицию повышает шанс успеха и найденную добычу", 200, "dragon_item", "amulet")
+        ]
 
         async with db.execute("SELECT COUNT(*) FROM shop_items") as cursor:
             count = (await cursor.fetchone())[0]
 
-        if count == 0:
-            badge_items = [
-                ("🕶 [Блатной]", "Прикольный значок к нику в рулетках", 150, "badge", "🕶 [Блатной]"),
-                ("🎯 [Снайпер]", "Стикер меткого стрелка в играх", 250, "badge", "🎯 [Снайпер]"),
-                ("⚽ [Форвард Gang]", "Футбольный статус бомбардира", 250, "badge", "⚽ [Форвард Gang]"),
-                ("⚡ [Гроза рулеток]", "Грозный титул в чат-играх", 400, "badge", "⚡ [Гроза рулеток]"),
-                ("🎰 [Фартовый]", "Статус главного везунчика клуба", 400, "badge", "🎰 [Фартовый]"),
-                ("💀 [Головорез]", "Опасный боевой статус в чате", 600, "badge", "💀 [Головорез]"),
-                ("💎 [VIP Gang]", "Премиум статус в турнирах и профиле", 800, "badge", "💎 [VIP Gang]"),
-                ("👑 [Шеф Gang]", "Высший авторитет Optimus Gang", 1200, "badge", "👑 [Шеф Gang]")
-            ]
-            await db.executemany(
-                "INSERT INTO shop_items (title, description, price, item_type, content) VALUES (?, ?, ?, ?, ?)",
-                badge_items
+        await db.execute(
+            "DELETE FROM shop_items WHERE item_type IS NULL OR item_type NOT IN ('badge', 'aura', 'taunt', 'dragon_item')"
+        )
+        for title, desc, price, i_type, content in shop_catalog:
+            await db.execute(
+                """INSERT INTO shop_items (title, description, price, item_type, content)
+                   SELECT ?, ?, ?, ?, ?
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM shop_items WHERE item_type = ? AND content = ?
+                   )""",
+                (title, desc, price, i_type, content, i_type, content)
             )
 
         # Синхронизация администраторов из .env ADMIN_IDS
@@ -186,6 +263,170 @@ async def get_user(user_id: int) -> Optional[Dict[str, Any]]:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+async def is_account_banned(user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return bool(row and row[0])
+
+async def get_accounts_page(page: int, page_size: int = 8) -> tuple[List[Dict[str, Any]], int]:
+    page = max(page, 0)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT COUNT(*) FROM users") as cursor:
+            total = (await cursor.fetchone())[0]
+        async with db.execute(
+            """SELECT user_id, username, full_name, nickname, balance, is_banned
+               FROM users ORDER BY created_at DESC, user_id DESC LIMIT ? OFFSET ?""",
+            (page_size, page * page_size)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows], total
+
+async def get_account_details(user_id: int) -> Optional[Dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT u.*,
+                      (SELECT COUNT(*) FROM duels d
+                       WHERE d.creator_id = u.user_id OR d.opponent_id = u.user_id) AS duel_count,
+                      (SELECT COUNT(*) FROM roulette_players rp
+                       WHERE rp.user_id = u.user_id) AS roulette_count
+               FROM users u WHERE u.user_id = ?""",
+            (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+async def set_account_banned(user_id: int, is_banned: bool) -> bool:
+    if user_id in ADMIN_IDS:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,)) as cursor:
+            if await cursor.fetchone():
+                return False
+        cursor = await db.execute(
+            "UPDATE users SET is_banned = ? WHERE user_id = ?",
+            (int(is_banned), user_id)
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+async def set_account_balance(user_id: int, balance: int) -> bool:
+    if balance < 0:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE users SET balance = ? WHERE user_id = ?",
+            (balance, user_id)
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+async def set_account_nickname(user_id: int, nickname: str) -> bool:
+    clean = nickname.strip()[:32]
+    if not clean:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE users SET nickname = ? WHERE user_id = ?",
+            (clean, user_id)
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+async def delete_account(user_id: int) -> bool:
+    if user_id in ADMIN_IDS:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,)) as cursor:
+            if await cursor.fetchone():
+                await db.rollback()
+                return False
+        async with db.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            if not await cursor.fetchone():
+                await db.rollback()
+                return False
+        async with db.execute(
+            """SELECT 1 FROM roulettes
+               WHERE creator_id = ? AND status = 'playing'
+               UNION ALL
+               SELECT 1 FROM roulette_players rp
+               JOIN roulettes r ON r.id = rp.roulette_id
+               WHERE rp.user_id = ? AND r.status = 'playing'
+               LIMIT 1""",
+            (user_id, user_id)
+        ) as cursor:
+            if await cursor.fetchone():
+                await db.rollback()
+                return False
+        async with db.execute(
+            """SELECT 1 FROM duels
+               WHERE status = 'playing' AND (creator_id = ? OR opponent_id = ?)
+               LIMIT 1""",
+            (user_id, user_id)
+        ) as cursor:
+            if await cursor.fetchone():
+                await db.rollback()
+                return False
+        await db.execute(
+            "UPDATE duels SET status = 'cancelled' WHERE creator_id = ? AND status = 'waiting'",
+            (user_id,)
+        )
+
+        async with db.execute(
+            """SELECT id, entry_fee FROM roulettes
+               WHERE creator_id = ? AND status IN ('registration', 'ready', 'playing')""",
+            (user_id,)
+        ) as cursor:
+            owned_lobbies = await cursor.fetchall()
+        for lobby_id, entry_fee in owned_lobbies:
+            if entry_fee > 0:
+                await db.execute(
+                    """UPDATE users SET balance = balance + ?
+                       WHERE user_id IN (
+                           SELECT user_id FROM roulette_players
+                           WHERE roulette_id = ? AND user_id != ?
+                       )""",
+                    (entry_fee, lobby_id, user_id)
+                )
+
+        async with db.execute(
+            """SELECT rp.roulette_id, r.status
+               FROM roulette_players rp
+               JOIN roulettes r ON r.id = rp.roulette_id
+               WHERE rp.user_id = ? AND r.status IN ('registration', 'ready')""",
+            (user_id,)
+        ) as cursor:
+            joined_lobbies = await cursor.fetchall()
+        for lobby_id, status in joined_lobbies:
+            if status == "ready":
+                await db.execute(
+                    "UPDATE roulettes SET status = 'registration' WHERE id = ? AND status = 'ready'",
+                    (lobby_id,)
+                )
+
+        await db.execute(
+            "UPDATE roulettes SET winner_id = NULL, winner_name = 'Удалённый аккаунт' WHERE winner_id = ?",
+            (user_id,)
+        )
+        await db.execute(
+            "DELETE FROM roulette_players WHERE roulette_id IN "
+            "(SELECT id FROM roulettes WHERE creator_id = ?)",
+            (user_id,)
+        )
+        await db.execute("DELETE FROM roulette_players WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM roulettes WHERE creator_id = ?", (user_id,))
+        await db.execute("DELETE FROM duels WHERE creator_id = ? OR opponent_id = ?", (user_id, user_id))
+        await db.execute("DELETE FROM purchases WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM user_inventory WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM user_dragons WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM dragon_expedition_cooldowns WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        await db.commit()
+        return True
+
 async def update_balance(user_id: int, amount: int) -> int:
     """Изменяет баланс пользователя (amount может быть отрицательным) и возвращает новый баланс."""
     if user_id <= 0:
@@ -197,37 +438,54 @@ async def update_balance(user_id: int, amount: int) -> int:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
-async def claim_daily_bonus(user_id: int) -> tuple[bool, int, Optional[str]]:
-    """Получение ежедневного бонуса раз в 24 часа."""
+async def claim_daily_bonus(user_id: int) -> tuple[bool, int, Optional[str], int]:
+    """
+    Получение прогрессивного ежедневного бонуса (стрик дней).
+    Возвращает (успех, сумма_бонуса, сообщение_или_время, текущий_стрик).
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT balance, last_bonus FROM users WHERE user_id = ?", (user_id,)) as cursor:
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT balance, last_bonus, bonus_streak FROM users WHERE user_id = ?", (user_id,)) as cursor:
             user = await cursor.fetchone()
             if not user:
-                return False, 0, "Пользователь не найден."
+                await db.rollback()
+                return False, 0, "Пользователь не найден.", 0
 
         last_bonus_str = user["last_bonus"]
+        streak = user["bonus_streak"] or 1
         now = datetime.now()
 
         if last_bonus_str:
             try:
                 last_bonus_time = datetime.fromisoformat(last_bonus_str)
                 time_passed = now - last_bonus_time
+
                 if time_passed < timedelta(hours=24):
                     remaining = timedelta(hours=24) - time_passed
                     hours, remainder = divmod(int(remaining.total_seconds()), 3600)
                     minutes, _ = divmod(remainder, 60)
-                    return False, user["balance"], f"{hours} ч. {minutes} мин."
-            except Exception:
-                pass
+                    await db.rollback()
+                    return False, user["balance"], f"{hours} ч. {minutes} мин.", streak
 
-        new_balance = user["balance"] + DAILY_BONUS
+                # Если прошло больше 48 часов, серия сбрасывается
+                if time_passed > timedelta(hours=48):
+                    streak = 1
+                else:
+                    streak = min(streak + 1, 7)
+            except Exception:
+                streak = 1
+
+        # Награда: день 1 = 15, день 2 = 20, день 3 = 25 ... день 7 = 50
+        bonus_amount = 15 + (streak - 1) * 5
+        new_balance = user["balance"] + bonus_amount
+
         await db.execute(
-            "UPDATE users SET balance = ?, last_bonus = ? WHERE user_id = ?",
-            (new_balance, now.isoformat(), user_id)
+            "UPDATE users SET balance = ?, last_bonus = ?, bonus_streak = ? WHERE user_id = ?",
+            (new_balance, now.isoformat(), streak, user_id)
         )
         await db.commit()
-        return True, DAILY_BONUS, None
+        return True, bonus_amount, None, streak
 
 # ==========================================
 # УПРАВЛЕНИЕ АДМИНИСТРАТОРАМИ
@@ -381,7 +639,10 @@ async def get_top_players(limit: int = 10, by: str = "balance") -> List[Dict[str
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            f"SELECT user_id, username, full_name, balance, wins, total_games FROM users ORDER BY {order_column} DESC LIMIT ?",
+            f"""SELECT user_id, username, full_name, nickname,
+                       COALESCE(NULLIF(nickname, ''), username, full_name) AS display_name,
+                       balance, wins, total_games
+                FROM users ORDER BY {order_column} DESC LIMIT ?""",
             (limit,)
         ) as cursor:
             rows = await cursor.fetchall()
@@ -411,24 +672,52 @@ async def buy_item(user_id: int, item_id: int) -> tuple[bool, str, Optional[Dict
     """Покупка товара в магазине Optimus Gang."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
             user = await cursor.fetchone()
             if not user:
+                await db.rollback()
                 return False, "Пользователь не найден.", None
 
         async with db.execute("SELECT * FROM shop_items WHERE id = ? AND is_active = 1", (item_id,)) as cursor:
             item = await cursor.fetchone()
             if not item:
+                await db.rollback()
                 return False, "Товар не найден или недоступен.", None
 
+        if item["item_type"] not in {"badge", "aura", "taunt", "dragon_item"}:
+            await db.rollback()
+            return False, "Этот предмет недоступен в игровом магазине.", None
+
+        if item["price"] < 0:
+            await db.rollback()
+            return False, "У товара указана некорректная цена.", None
+
         if user["balance"] < item["price"]:
+            await db.rollback()
             return False, f"Недостаточно монет! Требуется {item['price']} 🪙, у вас {user['balance']} 🪙.", None
 
-        await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (item["price"], user_id))
+        cursor = await db.execute(
+            "UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
+            (item["price"], user_id, item["price"])
+        )
+        if cursor.rowcount == 0:
+            await db.rollback()
+            return False, f"Недостаточно монет! Требуется {item['price']} 🪙.", None
 
-        # Если это значок/стикер к нику — сразу экипируем его
+        # Экипировка в зависимости от типа товара
         if item["item_type"] == "badge":
             await db.execute("UPDATE users SET badge = ? WHERE user_id = ?", (item["content"], user_id))
+        elif item["item_type"] == "aura":
+            await db.execute("UPDATE users SET aura = ? WHERE user_id = ?", (item["content"], user_id))
+        elif item["item_type"] == "taunt":
+            await db.execute("UPDATE users SET taunt = ? WHERE user_id = ?", (item["content"], user_id))
+        elif item["item_type"] == "dragon_item":
+            await db.execute("""
+                INSERT INTO user_inventory (user_id, item_key, title, quantity)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(user_id, item_key) DO UPDATE SET quantity = quantity + 1
+            """, (user_id, item["content"], item["title"]))
 
         await db.execute(
             "INSERT INTO purchases (user_id, item_id, item_title, content) VALUES (?, ?, ?, ?)",
@@ -443,6 +732,38 @@ async def get_user_badge(user_id: int) -> str:
         async with db.execute("SELECT badge FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row and row[0] else ""
+
+async def get_user_decorations(user_id: int) -> Dict[str, str]:
+    """Получает декорации профиля (титул, аура, боевой клич)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT badge, aura, taunt FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "badge": row["badge"] or "",
+                    "aura": row["aura"] or "",
+                    "taunt": row["taunt"] or ""
+                }
+            return {"badge": "", "aura": "", "taunt": ""}
+
+async def get_user_inventory(user_id: int) -> List[Dict[str, Any]]:
+    """Получает инвентарь пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM user_inventory WHERE user_id = ? AND quantity > 0", (user_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+async def use_inventory_item(user_id: int, item_key: str) -> bool:
+    """Использует 1 штуку предмета из инвентаря."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_key = ? AND quantity > 0",
+            (user_id, item_key)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 async def get_user_purchases(user_id: int) -> List[Dict[str, Any]]:
     """История покупок пользователя."""
@@ -497,11 +818,29 @@ async def get_active_chat_roulette(chat_id: int) -> Optional[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM roulettes WHERE chat_id = ? AND status IN ('registration', 'playing') ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM roulettes WHERE chat_id = ? AND status IN ('registration', 'ready', 'playing') ORDER BY id DESC LIMIT 1",
             (chat_id,)
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+async def set_roulette_status(roulette_id: int, status: str):
+    """Обновляет статус рулетки."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE roulettes SET status = ? WHERE id = ?", (status, roulette_id))
+        await db.commit()
+
+async def start_roulette(roulette_id: int) -> bool:
+    """Starts a full lobby exactly once after an admin confirms it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """UPDATE roulettes SET status = 'playing'
+               WHERE id = ? AND status = 'ready'
+                 AND (SELECT COUNT(*) FROM roulette_players WHERE roulette_id = ?) >= max_players""",
+            (roulette_id, roulette_id)
+        )
+        await db.commit()
+        return cursor.rowcount == 1
 
 async def join_roulette(roulette_id: int, user_id: int, username: Optional[str], full_name: str) -> tuple[bool, str, int, int]:
     """
@@ -510,44 +849,54 @@ async def join_roulette(roulette_id: int, user_id: int, username: Optional[str],
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT * FROM roulettes WHERE id = ?", (roulette_id,)) as cursor:
             roulette = await cursor.fetchone()
             if not roulette or roulette["status"] != "registration":
+                await db.rollback()
                 return False, "Запись на эту рулетку закрыта!", 0, 0
 
-        # Проверим, не записан ли уже
+        max_p = roulette["max_players"]
+        async with db.execute(
+            "SELECT COUNT(*) FROM roulette_players WHERE roulette_id = ?",
+            (roulette_id,)
+        ) as cursor:
+            count = (await cursor.fetchone())[0]
+        if count >= max_p:
+            await db.rollback()
+            return False, "Свободных мест больше нет.", count, max_p
+
         async with db.execute("SELECT 1 FROM roulette_players WHERE roulette_id = ? AND user_id = ?", (roulette_id, user_id)) as cursor:
             if await cursor.fetchone():
+                await db.rollback()
                 return False, "Вы уже записались в список участников!", 0, 0
 
-        # Проверим баланс если есть входной взнос
         entry_fee = roulette["entry_fee"]
         if entry_fee > 0:
-            async with db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                user = await cursor.fetchone()
-                if not user or user["balance"] < entry_fee:
-                    return False, f"Недостаточно монет для взноса! Нужно {entry_fee} 🪙.", 0, 0
-            # Списываем взнос
-            await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (entry_fee, user_id))
+            cursor = await db.execute(
+                "UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
+                (entry_fee, user_id, entry_fee)
+            )
+            if cursor.rowcount == 0:
+                await db.rollback()
+                return False, f"Недостаточно монет для взноса! Нужно {entry_fee} 🪙.", 0, 0
 
-        # Добавляем в список участников
         try:
             await db.execute(
                 """INSERT INTO roulette_players (roulette_id, user_id, username, full_name)
                    VALUES (?, ?, ?, ?)""",
                 (roulette_id, user_id, username, full_name)
             )
-        except Exception:
+        except aiosqlite.IntegrityError:
+            await db.rollback()
             return False, "Вы уже записаны!", 0, 0
 
-        # Считаем текущее количество
         async with db.execute("SELECT COUNT(*) FROM roulette_players WHERE roulette_id = ?", (roulette_id,)) as cursor:
             count = (await cursor.fetchone())[0]
 
-        max_p = roulette["max_players"]
-        if count >= max_p:
-            # Места заполнены — переводим статус в playing
-            await db.execute("UPDATE roulettes SET status = 'playing' WHERE id = ?", (roulette_id,))
+        if count == max_p:
+            # Места заполнены — переводим статус в 'ready' (ждёт нажатия админа)
+            await db.execute("UPDATE roulettes SET status = 'ready' WHERE id = ? AND status = 'registration'", (roulette_id,))
 
         await db.commit()
         return True, "Вы успешно записаны!", count, max_p
@@ -556,13 +905,16 @@ async def leave_roulette(roulette_id: int, user_id: int) -> tuple[bool, str]:
     """Выход участника из списка до начала игры (с возвратом взноса)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT * FROM roulettes WHERE id = ?", (roulette_id,)) as cursor:
             roulette = await cursor.fetchone()
             if not roulette or roulette["status"] != "registration":
-                return False, "Нельзя выйти, игра уже началась!"
+                await db.rollback()
+                return False, "Нельзя выйти, игра уже началась или готова к старту!"
 
         cursor = await db.execute("DELETE FROM roulette_players WHERE roulette_id = ? AND user_id = ?", (roulette_id, user_id))
         if cursor.rowcount == 0:
+            await db.rollback()
             return False, "Вы не были записаны в эту рулетку."
 
         entry_fee = roulette["entry_fee"]
@@ -577,7 +929,8 @@ async def get_roulette_players(roulette_id: int) -> List[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            """SELECT rp.*, COALESCE(u.badge, '') as badge
+            """SELECT rp.*, COALESCE(u.badge, '') as badge,
+                      COALESCE(NULLIF(u.nickname, ''), rp.full_name) AS display_name
                FROM roulette_players rp
                LEFT JOIN users u ON rp.user_id = u.user_id
                WHERE rp.roulette_id = ? ORDER BY rp.id ASC""",
@@ -594,6 +947,28 @@ async def update_roulette_player_roll(roulette_id: int, user_id: int, roll_value
             (roll_value, score, roulette_id, user_id)
         )
         await db.commit()
+
+async def link_roulette_player_user(
+    roulette_id: int,
+    placeholder_id: int,
+    user_id: int,
+    username: Optional[str],
+    full_name: str
+) -> bool:
+    """Replaces a list-game placeholder with the Telegram account that sent a roll."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """UPDATE roulette_players
+               SET user_id = ?, username = ?, full_name = ?
+               WHERE roulette_id = ? AND user_id = ?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM roulette_players
+                     WHERE roulette_id = ? AND user_id = ?
+                 )""",
+            (user_id, username, full_name, roulette_id, placeholder_id, roulette_id, user_id)
+        )
+        await db.commit()
+        return cursor.rowcount == 1
 
 async def finish_roulette(roulette_id: int, winner_id: int, winner_name: str):
     """Завершает рулетку и фиксирует победителя."""
@@ -613,9 +988,11 @@ async def cancel_roulette(roulette_id: int) -> bool:
     """Отменяет рулетку и возвращает взносы всем участникам."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM roulettes WHERE id = ? AND status IN ('registration', 'playing')", (roulette_id,)) as cursor:
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM roulettes WHERE id = ? AND status IN ('registration', 'ready')", (roulette_id,)) as cursor:
             roulette = await cursor.fetchone()
             if not roulette:
+                await db.rollback()
                 return False
 
         entry_fee = roulette["entry_fee"]
@@ -625,7 +1002,7 @@ async def cancel_roulette(roulette_id: int) -> bool:
                 for (uid,) in players:
                     await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (entry_fee, uid))
 
-        await db.execute("UPDATE roulettes SET status = 'cancelled' WHERE id = ?", (roulette_id,))
+        await db.execute("UPDATE roulettes SET status = 'cancelled' WHERE id = ? AND status IN ('registration', 'ready')", (roulette_id,))
         await db.commit()
         return True
 
@@ -641,11 +1018,525 @@ async def create_roulette_with_custom_players(chat_id: int, creator_id: int, gam
         for i, name in enumerate(players_list, 1):
             clean_name = name.strip()
             username = clean_name.lstrip("@") if clean_name.startswith("@") else None
-            # Для кастомных списков используем временный уникальный user_id (отрицательный i), если нет реального
+            user_id = None
+            if username:
+                async with db.execute(
+                    "SELECT user_id FROM users WHERE lower(username) = lower(?) ORDER BY user_id LIMIT 1",
+                    (username,)
+                ) as user_cursor:
+                    row = await user_cursor.fetchone()
+                    user_id = row[0] if row else None
+            # Unknown usernames receive a placeholder that is linked when they send their first roll.
             await db.execute(
                 """INSERT INTO roulette_players (roulette_id, user_id, username, full_name)
                    VALUES (?, ?, ?, ?)""",
-                (roulette_id, -i, username, clean_name)
+                (roulette_id, user_id if user_id is not None else -i, username, clean_name)
             )
         await db.commit()
         return roulette_id
+
+# ==========================================
+# ИГРА: ВЫРАЩИВАНИЕ ДРАКОНОВ OPTIMUS GANG
+# ==========================================
+
+DRAGON_STAGES = {
+    1: {"name": "🥚 Древнее Яйцо", "min_lvl": 1},
+    2: {"name": "🐣 Дракончик-малыш", "min_lvl": 2},
+    3: {"name": "🐲 Юный Огнекрыл", "min_lvl": 5},
+    4: {"name": "🐉 Боевой Дракон-воин", "min_lvl": 10},
+    5: {"name": "👑 Дракон-Титан Optimus", "min_lvl": 15}
+}
+
+def get_dragon_stage(level: int) -> int:
+    if level >= 15:
+        return 5
+    elif level >= 10:
+        return 4
+    elif level >= 5:
+        return 3
+    elif level >= 2:
+        return 2
+    return 1
+
+def xp_for_next_level(level: int) -> int:
+    return 50 + (level - 1) * 40
+
+async def get_or_create_dragon(user_id: int) -> Dict[str, Any]:
+    """Получает дракона игрока или создает нового в стадии яйца."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_dragons WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                await db.rollback()
+                return dict(row)
+
+        await db.execute("""
+            INSERT INTO user_dragons (
+                user_id, name, element, stage, level, xp, energy, max_energy, power
+            ) VALUES (?, 'Огнекрыл', '🔥 Огонь', 1, 1, 0, 100, 100, 15)
+        """, (user_id,))
+        await db.commit()
+
+        async with db.execute("SELECT * FROM user_dragons WHERE user_id = ?", (user_id,)) as cursor:
+            new_row = await cursor.fetchone()
+            return dict(new_row)
+
+async def feed_dragon(user_id: int, item_key: Optional[str] = None) -> tuple[bool, str, Dict[str, Any]]:
+    """Кормление дракона (бесплатно раз в час или специальным предметом)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_dragons WHERE user_id = ?", (user_id,)) as cursor:
+            dragon = await cursor.fetchone()
+            if not dragon:
+                await db.rollback()
+                return False, "У вас еще нет дракона!", {}
+
+        dragon = dict(dragon)
+        now = datetime.now()
+
+        xp_gain = 0
+        energy_gain = 0
+        power_gain = 0
+        msg_detail = ""
+
+        if not item_key:
+            # Бесплатная еда раз в 1 час
+            last_fed_str = dragon.get("last_fed")
+            if last_fed_str:
+                try:
+                    last_time = datetime.fromisoformat(last_fed_str)
+                    if (now - last_time) < timedelta(hours=1):
+                        diff = timedelta(hours=1) - (now - last_time)
+                        mins = int(diff.total_seconds() // 60)
+                        await db.rollback()
+                        return False, f"Дракон сыт! Бесплатная порция через: <b>{mins} мин.</b>", dragon
+                except Exception:
+                    pass
+            xp_gain = 25
+            energy_gain = 25
+            msg_detail = "🍖 Вы покормили дракона свежим мясом (+25 ⚡ энергии, +25 XP)!"
+        elif item_key == "steak":
+            item_cursor = await db.execute(
+                "UPDATE user_inventory SET quantity = quantity - 1 "
+                "WHERE user_id = ? AND item_key = 'steak' AND quantity > 0",
+                (user_id,)
+            )
+            if item_cursor.rowcount == 0:
+                await db.rollback()
+                return False, "У вас нет Стейка из виверны! Купите его в магазине.", dragon
+            xp_gain = 35
+            energy_gain = 50
+            power_gain = 2
+            msg_detail = "🥩 Сочный стейк придал дракону диких сил (+50 ⚡, +35 XP, +2 💪 силы)!"
+        elif item_key == "potion":
+            item_cursor = await db.execute(
+                "UPDATE user_inventory SET quantity = quantity - 1 "
+                "WHERE user_id = ? AND item_key = 'potion' AND quantity > 0",
+                (user_id,)
+            )
+            if item_cursor.rowcount == 0:
+                await db.rollback()
+                return False, "У вас нет Зелья бодрости! Купите его в магазине.", dragon
+            xp_gain = 50
+            energy_gain = 100
+            power_gain = 3
+            msg_detail = "🧪 Зелье наполнило дракона чистой магией (100% ⚡ энергии, +50 XP, +3 💪)!"
+        elif item_key == "crystal":
+            item_cursor = await db.execute(
+                "UPDATE user_inventory SET quantity = quantity - 1 "
+                "WHERE user_id = ? AND item_key = 'crystal' AND quantity > 0",
+                (user_id,)
+            )
+            if item_cursor.rowcount == 0:
+                await db.rollback()
+                return False, "У вас нет Кристалла эволюции!", dragon
+            xp_gain = 150
+            energy_gain = 30
+            power_gain = 8
+            msg_detail = "✨ Кристалл эволюции вызвал яркую вспышку (+150 XP, +8 💪 силы)!"
+
+        new_energy = min(dragon["max_energy"], dragon["energy"] + energy_gain)
+        new_xp = dragon["xp"] + xp_gain
+        new_power = dragon["power"] + power_gain
+        new_level = dragon["level"]
+
+        # Проверка повышения уровня
+        req_xp = xp_for_next_level(new_level)
+        level_up_msg = ""
+        while new_xp >= req_xp:
+            new_xp -= req_xp
+            new_level += 1
+            new_power += 5
+            req_xp = xp_for_next_level(new_level)
+            level_up_msg += f"\n🎉 <b>УРОВЕНЬ ПОВЫШЕН! Теперь уровень {new_level}!</b> (+5 к силе)"
+
+        new_stage = get_dragon_stage(new_level)
+        if new_stage > dragon["stage"]:
+            level_up_msg += f"\n🔥 <b>ДРАКОН ЭВОЛЮЦИОНИРОВАЛ В СТАДИЮ: {DRAGON_STAGES[new_stage]['name']}!</b>"
+
+        await db.execute("""
+            UPDATE user_dragons SET
+                xp = ?, level = ?, stage = ?, energy = ?, power = ?, last_fed = ?
+            WHERE user_id = ?
+        """, (new_xp, new_level, new_stage, new_energy, new_power, now.isoformat(), user_id))
+        await db.commit()
+
+        dragon["xp"] = new_xp
+        dragon["level"] = new_level
+        dragon["stage"] = new_stage
+        dragon["energy"] = new_energy
+        dragon["power"] = new_power
+
+        return True, f"{msg_detail}{level_up_msg}", dragon
+
+async def train_dragon(user_id: int) -> tuple[bool, str, Dict[str, Any]]:
+    """Тренировка дракона (тратит 25 энергии, кулдаун 10 минут)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_dragons WHERE user_id = ?", (user_id,)) as cursor:
+            dragon = await cursor.fetchone()
+            if not dragon:
+                await db.rollback()
+                return False, "У вас еще нет дракона!", {}
+
+        dragon = dict(dragon)
+        now = datetime.now()
+
+        if dragon["stage"] == 1:
+            await db.rollback()
+            return False, "🥚 Яйцо пока не может тренироваться! Сначала кормите его, чтобы вылупился дракончик.", dragon
+
+        if dragon["energy"] < 25:
+            await db.rollback()
+            return False, f"❌ Недостаточно энергии! Требуется 25 ⚡, у дракона {dragon['energy']} ⚡. Покормите его!", dragon
+
+        last_train_str = dragon.get("last_trained")
+        if last_train_str:
+            try:
+                last_time = datetime.fromisoformat(last_train_str)
+                if (now - last_time) < timedelta(minutes=10):
+                    diff = timedelta(minutes=10) - (now - last_time)
+                    mins = int(diff.total_seconds() // 60) + 1
+                    await db.rollback()
+                    return False, f"⏳ Дракон восстанавливает дыхание! Следующая тренировка через: <b>{mins} мин.</b>", dragon
+            except Exception:
+                pass
+
+        import random
+        xp_gain = random.randint(25, 40)
+        power_gain = random.randint(2, 5)
+
+        new_energy = dragon["energy"] - 25
+        new_xp = dragon["xp"] + xp_gain
+        new_power = dragon["power"] + power_gain
+        new_level = dragon["level"]
+
+        req_xp = xp_for_next_level(new_level)
+        level_up_msg = ""
+        while new_xp >= req_xp:
+            new_xp -= req_xp
+            new_level += 1
+            new_power += 5
+            req_xp = xp_for_next_level(new_level)
+            level_up_msg += f"\n🎉 <b>УРОВЕНЬ ПОВЫШЕН! Теперь уровень {new_level}!</b>"
+
+        new_stage = get_dragon_stage(new_level)
+        if new_stage > dragon["stage"]:
+            level_up_msg += f"\n🔥 <b>ЭВОЛЮЦИЯ: {DRAGON_STAGES[new_stage]['name']}!</b>"
+
+        await db.execute("""
+            UPDATE user_dragons SET
+                xp = ?, level = ?, stage = ?, energy = ?, power = ?, last_trained = ?
+            WHERE user_id = ?
+        """, (new_xp, new_level, new_stage, new_energy, new_power, now.isoformat(), user_id))
+        await db.commit()
+
+        dragon["xp"] = new_xp
+        dragon["level"] = new_level
+        dragon["stage"] = new_stage
+        dragon["energy"] = new_energy
+        dragon["power"] = new_power
+
+        return True, (
+            f"🥊 <b>Боевая тренировка завершена!</b>\n"
+            f"Дракон отработал удары хвостом и огненное дыхание!\n"
+            f"📈 Получено: <b>+{xp_gain} XP</b>, <b>+{power_gain} 💪 силы</b>\n"
+            f"⚡ Энергия: <code>{new_energy}/100</code>"
+            f"{level_up_msg}"
+        ), dragon
+
+async def send_dragon_expedition(user_id: int, exp_type: str) -> tuple[bool, str, Dict[str, Any]]:
+    """Отправка дракона в поход/экспедицию за монетами и сокровищами."""
+    import random
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_dragons WHERE user_id = ?", (user_id,)) as cursor:
+            dragon = await cursor.fetchone()
+            if not dragon:
+                await db.rollback()
+                return False, "У вас нет дракона!", {}
+
+        dragon = dict(dragon)
+        now = datetime.now()
+
+        if dragon["stage"] == 1:
+            await db.rollback()
+            return False, "🥚 Яйцо не может летать в экспедиции! Сначала согрейте и покормите его.", dragon
+
+        configs = {
+            "forest": {
+                "name": "🌲 Зачарованный Лес",
+                "min_lvl": 1,
+                "energy_cost": 20,
+                "cooldown_min": 15,
+                "success_rate": 85,
+                "reward_coins": (5, 15),
+                "reward_xp": 20
+            },
+            "cave": {
+                "name": "⛰️ Пещера Черепа",
+                "min_lvl": 4,
+                "energy_cost": 35,
+                "cooldown_min": 60,
+                "success_rate": 70,
+                "reward_coins": (20, 45),
+                "reward_xp": 50
+            },
+            "volcano": {
+                "name": "🌋 Вулкан Древних Титанов",
+                "min_lvl": 8,
+                "energy_cost": 50,
+                "cooldown_min": 180,
+                "success_rate": 55,
+                "reward_coins": (50, 100),
+                "reward_xp": 110
+            }
+        }
+
+        conf = configs.get(exp_type)
+        if not conf:
+            await db.rollback()
+            return False, "Неизвестная экспедиция.", dragon
+
+        if dragon["level"] < conf["min_lvl"]:
+            await db.rollback()
+            return False, f"🔒 Для похода в «{conf['name']}» требуется {conf['min_lvl']} уровень дракона!", dragon
+
+        element = dragon["element"]
+        energy_cost = max(10, conf["energy_cost"] - (5 if "Лёд" in element else 0))
+        if dragon["energy"] < energy_cost:
+            await db.rollback()
+            return False, f"❌ Недостаточно энергии! Требуется {energy_cost} ⚡, у дракона {dragon['energy']} ⚡.", dragon
+
+        async with db.execute(
+            "SELECT last_used FROM dragon_expedition_cooldowns WHERE user_id = ? AND expedition = ?",
+            (user_id, exp_type)
+        ) as cursor:
+            cooldown_row = await cursor.fetchone()
+        last_exp_str = cooldown_row["last_used"] if cooldown_row else None
+        if last_exp_str:
+            try:
+                last_time = datetime.fromisoformat(last_exp_str)
+                cd = timedelta(minutes=conf["cooldown_min"])
+                if (now - last_time) < cd:
+                    diff = cd - (now - last_time)
+                    mins = int(diff.total_seconds() // 60) + 1
+                    await db.rollback()
+                    return False, f"⏳ Дракон еще не вернулся из предыдущего рейда! Подождите: <b>{mins} мин.</b>", dragon
+            except Exception:
+                pass
+
+        # Проверка на оберег удачи в инвентаре
+        async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_key = 'amulet' AND quantity > 0", (user_id,)) as cur:
+            has_amulet = (await cur.fetchone()) is not None
+
+        if has_amulet:
+            await db.execute(
+                "UPDATE user_inventory SET quantity = quantity - 1 "
+                "WHERE user_id = ? AND item_key = 'amulet' AND quantity > 0",
+                (user_id,)
+            )
+
+        success_chance = conf["success_rate"] + (15 if has_amulet else 0) + (dragon["power"] // 10)
+        if "Огонь" in element:
+            success_chance += 10
+        success_chance = min(95, success_chance)
+        roll = random.randint(1, 100)
+        is_success = roll <= success_chance
+
+        new_energy = dragon["energy"] - energy_cost
+        new_xp = dragon["xp"]
+        new_power = dragon["power"]
+        new_level = dragon["level"]
+        coins_found = 0
+        rare_find_text = ""
+
+        if is_success:
+            coins_found = random.randint(*conf["reward_coins"])
+            # Бонус стихии
+            if "Тень" in element:
+                coins_found = int(coins_found * 1.3)
+            elif "Золото" in element:
+                coins_found = int(coins_found * 1.15)
+            if has_amulet:
+                coins_found = int(coins_found * 1.1)
+            if random.randint(1, 100) <= 5:
+                rare_bonus = random.randint(25, 60)
+                coins_found += rare_bonus
+                new_xp += 25
+                rare_find_text = (
+                    f"\n🌠 <b>РЕДКАЯ НАХОДКА!</b> Дракон обнаружил метеоритный осколок "
+                    f"(+{rare_bonus} 🪙 и +25 XP)!"
+                )
+            new_xp += conf["reward_xp"]
+            new_power += 1
+            await db.execute(
+                "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                (coins_found, user_id)
+            )
+
+            req_xp = xp_for_next_level(new_level)
+            level_up_msg = ""
+            while new_xp >= req_xp:
+                new_xp -= req_xp
+                new_level += 1
+                new_power += 5
+                req_xp = xp_for_next_level(new_level)
+                level_up_msg += f"\n🎉 <b>УРОВЕНЬ ПОВЫШЕН! Теперь уровень {new_level}!</b>"
+
+            new_stage = get_dragon_stage(new_level)
+
+            await db.execute("""
+                UPDATE user_dragons SET
+                    xp = ?, level = ?, stage = ?, energy = ?, power = ?,
+                    last_expedition = ?, expeditions_count = expeditions_count + 1, wins_count = wins_count + 1
+                WHERE user_id = ?
+            """, (new_xp, new_level, new_stage, new_energy, new_power, now.isoformat(), user_id))
+            await db.execute(
+                """INSERT INTO dragon_expedition_cooldowns (user_id, expedition, last_used)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id, expedition) DO UPDATE SET last_used = excluded.last_used""",
+                (user_id, exp_type, now.isoformat())
+            )
+            await db.commit()
+
+            return True, (
+                f"⚔️ <b>УСПЕХ В ЭКСПЕДИЦИИ: {conf['name']}!</b>\n\n"
+                f"Дракон сразил монстров подземелья и вернулся с добычей!\n"
+                f"💰 Найдено монет: <b>+{coins_found} 🪙</b>\n"
+                f"📈 Опыт: <b>+{conf['reward_xp']} XP</b> (+1 к силе)\n"
+                f"⚡ Энергия: <code>{new_energy}/100</code> (потрачено {energy_cost})"
+                f"{rare_find_text}{level_up_msg}"
+            ), dragon
+        else:
+            # Неудача
+            new_xp += 5
+            req_xp = xp_for_next_level(new_level)
+            level_up_msg = ""
+            while new_xp >= req_xp:
+                new_xp -= req_xp
+                new_level += 1
+                new_power += 5
+                req_xp = xp_for_next_level(new_level)
+                level_up_msg += f"\n🎉 <b>УРОВЕНЬ ПОВЫШЕН! Теперь уровень {new_level}!</b>"
+            new_stage = get_dragon_stage(new_level)
+            await db.execute("""
+                UPDATE user_dragons SET
+                    xp = ?, level = ?, stage = ?, energy = ?, power = ?,
+                    last_expedition = ?, expeditions_count = expeditions_count + 1
+                WHERE user_id = ?
+            """, (new_xp, new_level, new_stage, new_energy, new_power, now.isoformat(), user_id))
+            await db.execute(
+                """INSERT INTO dragon_expedition_cooldowns (user_id, expedition, last_used)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id, expedition) DO UPDATE SET last_used = excluded.last_used""",
+                (user_id, exp_type, now.isoformat())
+            )
+            await db.commit()
+
+            return False, (
+                f"⚠️ <b>Опасное отступление из: {conf['name']}!</b>\n\n"
+                f"В глубинах логова враги оказались слишком сильны, дракон был вынужден отступить.\n"
+                f"Получено немного опыта за бой (+5 XP), но сокровища не найдены.\n"
+                f"Потренируйте дракона и восстановите энергию!{level_up_msg}"
+            ), dragon
+
+async def claim_dragon_income(user_id: int) -> tuple[bool, int, Optional[str]]:
+    """Сбор пассивной дани из логова дракона (раз в 12 часов)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_dragons WHERE user_id = ?", (user_id,)) as cursor:
+            dragon = await cursor.fetchone()
+            if not dragon:
+                await db.rollback()
+                return False, 0, "У вас нет дракона!"
+
+        dragon = dict(dragon)
+        now = datetime.now()
+
+        if dragon["stage"] == 1:
+            await db.rollback()
+            return False, 0, "🥚 Яйцо еще не приносит дохода. Вырастите дракончика!"
+
+        last_inc_str = dragon.get("last_income")
+        if last_inc_str:
+            try:
+                last_time = datetime.fromisoformat(last_inc_str)
+                if (now - last_time) < timedelta(hours=12):
+                    diff = timedelta(hours=12) - (now - last_time)
+                    hours = int(diff.total_seconds() // 3600)
+                    mins = int((diff.total_seconds() % 3600) // 60)
+                    await db.rollback()
+                    return False, 0, f"{hours} ч. {mins} мин."
+            except Exception:
+                pass
+
+        # Доход зависит от уровня
+        base_income = 10 + dragon["level"] * 3
+        if "Золото" in dragon["element"]:
+            base_income = int(base_income * 1.5)
+
+        await db.execute(
+            "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+            (base_income, user_id)
+        )
+        await db.execute("UPDATE user_dragons SET last_income = ? WHERE user_id = ?", (now.isoformat(), user_id))
+        await db.commit()
+        return True, base_income, None
+
+async def rename_dragon(user_id: int, new_name: str) -> bool:
+    """Смена клички дракона."""
+    clean = new_name.strip()[:25]
+    if not clean:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE user_dragons SET name = ? WHERE user_id = ?", (clean, user_id))
+        await db.commit()
+        return True
+
+async def set_dragon_element(user_id: int, element: str) -> bool:
+    """Выбор стихии дракона при рождении."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE user_dragons SET element = ? WHERE user_id = ?", (element, user_id))
+        await db.commit()
+        return True
+
+async def get_top_dragons(limit: int = 10) -> List[Dict[str, Any]]:
+    """Топ сильнейших драконов клуба."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT d.*, u.username, u.full_name
+            FROM user_dragons d
+            LEFT JOIN users u ON d.user_id = u.user_id
+            ORDER BY d.level DESC, d.power DESC
+            LIMIT ?
+        """, (limit,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]

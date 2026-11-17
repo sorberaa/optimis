@@ -1,4 +1,8 @@
+import html
+from typing import Any, Dict
+
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from config import SHOP_NAME, DB_PATH
@@ -9,11 +13,19 @@ from database import (
     remove_admin,
     get_all_admins,
     update_balance,
-    add_shop_item
+    add_shop_item,
+    get_accounts_page,
+    get_account_details,
+    set_account_banned,
+    set_account_balance,
+    set_account_nickname,
+    delete_account,
 )
 import aiosqlite
 
 router = Router()
+ACCOUNT_PAGE_SIZE = 8
+account_action_states: Dict[int, Dict[str, Any]] = {}
 
 def admin_panel_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
     """Инлайн-кнопки панели администратора."""
@@ -23,6 +35,9 @@ def admin_panel_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Статистика клуба", callback_data="admin_stats")
         ]
     ]
+    buttons.append([
+        InlineKeyboardButton(text="👤 Игровые аккаунты", callback_data="admin_accounts")
+    ])
     if is_super:
         buttons.append([
             InlineKeyboardButton(text="➕ Назначить админа", callback_data="admin_add_info"),
@@ -40,6 +55,87 @@ def admin_panel_keyboard(is_super: bool = False) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="❌ Закрыть панель", callback_data="admin_close")
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def accounts_keyboard(accounts, page: int, total: int) -> InlineKeyboardMarkup:
+    buttons = []
+    for account in accounts:
+        name = account.get("nickname") or account.get("username") or account.get("full_name") or "Игрок"
+        status = "⛔ " if account["is_banned"] else ""
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{status}{name[:28]} · {account['balance']} 🪙",
+                callback_data=f"account_view:{account['user_id']}:{page}"
+            )
+        ])
+
+    navigation = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"accounts_page:{page - 1}"))
+    if (page + 1) * ACCOUNT_PAGE_SIZE < total:
+        navigation.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"accounts_page:{page + 1}"))
+    if navigation:
+        buttons.append(navigation)
+    buttons.append([InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="account_admin_back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def account_details_text(account: Dict[str, Any]) -> str:
+    real_name = html.escape(account["full_name"] or "")
+    username = f"@{html.escape(account['username'])}" if account.get("username") else "не задан"
+    nickname = html.escape(account.get("nickname") or "не задан")
+    status = "⛔ Заблокирован" if account["is_banned"] else "✅ Активен"
+    return (
+        f"👤 <b>Игровой аккаунт</b>\n\n"
+        f"ID: <code>{account['user_id']}</code>\n"
+        f"Статус: {status}\n"
+        f"Игровой ник: <b>{nickname}</b>\n"
+        f"Telegram: {username}\n"
+        f"Имя Telegram: {real_name}\n"
+        f"Баланс: <b>{account['balance']} 🪙</b>\n"
+        f"Побед: {account['wins']} | Поражений: {account['losses']} | "
+        f"Игр всего: {account['total_games']}\n"
+        f"Дуэлей: {account['duel_count']} | Участий в рулетках: {account['roulette_count']}\n"
+        f"Создан: {html.escape(str(account.get('created_at') or 'неизвестно'))}"
+    )
+
+def account_details_keyboard(account: Dict[str, Any], page: int) -> InlineKeyboardMarkup:
+    ban_label = "✅ Разблокировать" if account["is_banned"] else "⛔ Заблокировать"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=ban_label, callback_data=f"account_ban:{account['user_id']}:{page}")
+        ],
+        [
+            InlineKeyboardButton(text="💰 Баланс", callback_data=f"account_balance:{account['user_id']}:{page}"),
+            InlineKeyboardButton(text="🏷 Игровой ник", callback_data=f"account_rename:{account['user_id']}:{page}")
+        ],
+        [
+            InlineKeyboardButton(text="📩 Написать в личку", callback_data=f"account_message:{account['user_id']}:{page}")
+        ],
+        [
+            InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"account_delete:{account['user_id']}:{page}")
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ К списку", callback_data=f"accounts_page:{page}")
+        ]
+    ])
+
+async def show_accounts_page(message, page: int):
+    accounts, total = await get_accounts_page(page, ACCOUNT_PAGE_SIZE)
+    pages = max(1, (total + ACCOUNT_PAGE_SIZE - 1) // ACCOUNT_PAGE_SIZE)
+    page = min(page, pages - 1)
+    accounts, total = await get_accounts_page(page, ACCOUNT_PAGE_SIZE)
+    await message.edit_text(
+        f"👤 <b>Игровые аккаунты</b> — {total} аккаунтов, страница {page + 1}/{pages}.\n"
+        "Выбери аккаунт для просмотра и управления.",
+        reply_markup=accounts_keyboard(accounts, page, total),
+        parse_mode="HTML"
+    )
+
+async def account_view(user_id: int, page: int):
+    account = await get_account_details(user_id)
+    if not account:
+        accounts, total = await get_accounts_page(page, ACCOUNT_PAGE_SIZE)
+        return "Аккаунт не найден.", accounts_keyboard(accounts, page, total)
+    return account_details_text(account), account_details_keyboard(account, page)
 
 @router.message(Command("admin"))
 async def cmd_admin(message: Message):
@@ -231,12 +327,15 @@ async def cb_admin_roulette_info(callback: CallbackQuery):
         "<code>/list_game\n"
         "1. @ivan\n"
         "2. @sergey\n"
-        "3. @dmitry</code>\n"
+        "3. @dmitry</code> (нужны @username для проверки бросков)\n"
         "<i>Или ответьте командой /list_game на сообщение со списком!</i>\n\n"
         "<b>2. Интерактивная рулетка с самозаписью:</b>\n"
-        "Команда <code>/roulette</code> создаёт интерактивный пост, куда участники записываются по кнопкам.\n\n"
+        "Команда <code>/roulette</code> создаёт пост для записи. Когда все места заняты, бот объявит об этом; "
+        "игра начнётся только после нажатия админом кнопки «Запустить».\n\n"
+        "<b>Броски:</b> каждый участник сам отправляет в чат 3 анимированных броска нужного типа. "
+        "Кнопка бота не делает бросок.\n\n"
         "⏱ <b>Правило 2 минут:</b>\n"
-        "В живом режиме на каждый ход дается ровно 2 минуты. Если человек не явился — <b>автоматическая дисквалификация (DQ)</b>!"
+        "На три броска даётся 2 минуты. Если человек не явился — <b>автоматическая дисквалификация (DQ)</b>!"
     )
     super_status = await is_superadmin(callback.from_user.id)
     await callback.message.edit_text(text, reply_markup=admin_panel_keyboard(super_status), parse_mode="HTML")
@@ -417,3 +516,225 @@ async def cmd_stats_admin(message: Message):
         f"• Администраторов: <b>{admins_count or 0}</b>"
     )
     await message.answer(text, parse_mode="HTML")
+
+
+# ==========================================
+# УПРАВЛЕНИЕ ИГРОВЫМИ АККАУНТАМИ
+# ==========================================
+
+async def account_admin_allowed(callback: CallbackQuery) -> bool:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещен.", show_alert=True)
+        return False
+    if callback.message.chat.type != "private":
+        await callback.answer("Открой личный чат с ботом для управления аккаунтами.", show_alert=True)
+        return False
+    return True
+
+
+@router.callback_query(F.data == "admin_accounts")
+async def cb_admin_accounts(callback: CallbackQuery):
+    if not await account_admin_allowed(callback):
+        return
+    await show_accounts_page(callback.message, 0)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("accounts_page:"))
+async def cb_accounts_page(callback: CallbackQuery):
+    if not await account_admin_allowed(callback):
+        return
+    page = max(0, int(callback.data.split(":")[1]))
+    await show_accounts_page(callback.message, page)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account_view:"))
+async def cb_account_view(callback: CallbackQuery):
+    if not await account_admin_allowed(callback):
+        return
+    _, raw_user_id, raw_page = callback.data.split(":")
+    text, keyboard = await account_view(int(raw_user_id), int(raw_page))
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "account_admin_back")
+async def cb_account_admin_back(callback: CallbackQuery):
+    if not await account_admin_allowed(callback):
+        return
+    await callback.message.edit_text(
+        "Панель администратора.",
+        reply_markup=admin_panel_keyboard(await is_superadmin(callback.from_user.id)),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account_ban:"))
+async def cb_account_ban(callback: CallbackQuery):
+    if not await account_admin_allowed(callback):
+        return
+    _, raw_user_id, raw_page = callback.data.split(":")
+    user_id, page = int(raw_user_id), int(raw_page)
+    account = await get_account_details(user_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    success = await set_account_banned(user_id, not bool(account["is_banned"]))
+    if not success:
+        await callback.answer("Нельзя блокировать аккаунт администратора.", show_alert=True)
+        return
+    text, keyboard = await account_view(user_id, page)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer("Статус аккаунта изменён.")
+
+
+async def request_account_action(callback: CallbackQuery, action: str):
+    if not await account_admin_allowed(callback):
+        return
+    _, raw_user_id, raw_page = callback.data.split(":")
+    user_id, page = int(raw_user_id), int(raw_page)
+    if not await get_account_details(user_id):
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    account_action_states[callback.from_user.id] = {
+        "action": action,
+        "user_id": user_id,
+        "page": page,
+    }
+    prompts = {
+        "balance": "Введи новый баланс монет (целое число от 0 до 2 147 483 647).",
+        "nickname": "Введи новый игровой ник (до 32 символов).",
+        "message": "Введи текст личного сообщения. Пользователь должен хотя бы раз открыть бота.",
+    }
+    await callback.message.answer(
+        prompts[action],
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="account_action_cancel")
+        ]])
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account_balance:"))
+async def cb_account_balance(callback: CallbackQuery):
+    await request_account_action(callback, "balance")
+
+
+@router.callback_query(F.data.startswith("account_rename:"))
+async def cb_account_rename(callback: CallbackQuery):
+    await request_account_action(callback, "nickname")
+
+
+@router.callback_query(F.data.startswith("account_message:"))
+async def cb_account_message(callback: CallbackQuery):
+    await request_account_action(callback, "message")
+
+
+@router.callback_query(F.data.startswith("account_delete:"))
+async def cb_account_delete(callback: CallbackQuery):
+    if not await account_admin_allowed(callback):
+        return
+    _, raw_user_id, raw_page = callback.data.split(":")
+    user_id, page = int(raw_user_id), int(raw_page)
+    account = await get_account_details(user_id)
+    if not account:
+        await callback.answer("Аккаунт не найден.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"⚠️ <b>Удалить игровой аккаунт {html.escape(account.get('nickname') or account.get('full_name') or 'Игрок')}?</b>\n\n"
+        "Будут удалены баланс, дракон, покупки и игровые записи. Отменить это действие нельзя.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"account_delete_confirm:{user_id}:{page}")],
+            [InlineKeyboardButton(text="↩️ Не удалять", callback_data=f"account_view:{user_id}:{page}")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account_delete_confirm:"))
+async def cb_account_delete_confirm(callback: CallbackQuery):
+    if not await account_admin_allowed(callback):
+        return
+    _, raw_user_id, raw_page = callback.data.split(":")
+    if not await delete_account(int(raw_user_id)):
+        await callback.answer(
+            "Аккаунт не найден, защищён или участвует в незавершённой игре.",
+            show_alert=True
+        )
+        return
+    page = int(raw_page)
+    await show_accounts_page(callback.message, page)
+    await callback.answer("Аккаунт и связанные игровые данные удалены.")
+
+
+@router.callback_query(F.data == "account_action_cancel")
+async def cb_account_action_cancel(callback: CallbackQuery):
+    if not await account_admin_allowed(callback):
+        return
+    account_action_states.pop(callback.from_user.id, None)
+    await callback.message.delete()
+    await callback.answer("Действие отменено.")
+
+
+async def account_action_input_filter(message: Message) -> bool:
+    return bool(
+        message.from_user
+        and message.chat.type == "private"
+        and message.from_user.id in account_action_states
+    )
+
+
+@router.message(account_action_input_filter)
+async def handle_account_action_input(message: Message, bot: Bot):
+    admin_id = message.from_user.id
+    state = account_action_states.get(admin_id)
+    if not state or not await is_admin(admin_id):
+        account_action_states.pop(admin_id, None)
+        return
+
+    text = (message.text or "").strip()
+    action = state["action"]
+    user_id = state["user_id"]
+    page = state["page"]
+
+    if action == "balance":
+        if not text.isdecimal() or int(text) > 2_147_483_647:
+            await message.reply("Нужно целое число от 0 до 2 147 483 647. Попробуй ещё раз.")
+            return
+        changed = await set_account_balance(user_id, int(text))
+        confirmation = "Баланс изменён." if changed else "Аккаунт не найден."
+    elif action == "nickname":
+        if not text or len(text) > 32:
+            await message.reply("Ник должен содержать от 1 до 32 символов. Попробуй ещё раз.")
+            return
+        changed = await set_account_nickname(user_id, text)
+        confirmation = "Игровой ник изменён." if changed else "Аккаунт не найден."
+    else:
+        if not text or len(text) > 4000:
+            await message.reply("Сообщение должно содержать от 1 до 4000 символов.")
+            return
+        try:
+            await bot.send_message(
+                user_id,
+                f"📩 <b>Сообщение от администрации:</b>\n\n{html.escape(text)}",
+                parse_mode="HTML"
+            )
+            confirmation = "Личное сообщение доставлено."
+        except (TelegramForbiddenError, TelegramBadRequest) as exc:
+            confirmation = (
+                "Не удалось доставить сообщение. Возможно, пользователь не запускал бота "
+                f"или заблокировал его. Причина Telegram: {html.escape(str(exc))}"
+            )
+
+    account_action_states.pop(admin_id, None)
+    await message.answer(confirmation)
+    account = await get_account_details(user_id)
+    if account:
+        await message.answer(
+            account_details_text(account),
+            reply_markup=account_details_keyboard(account, page),
+            parse_mode="HTML"
+        )

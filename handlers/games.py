@@ -1,4 +1,5 @@
 import asyncio
+import html
 import time
 from typing import Dict
 from aiogram import Router, F, Bot
@@ -13,7 +14,8 @@ from database import (
     accept_duel,
     cancel_duel,
     record_duel_result,
-    update_balance
+    update_balance,
+    get_user_decorations
 )
 from keyboards.inline import (
     games_selection_keyboard,
@@ -308,6 +310,11 @@ async def cb_set_bet(callback: CallbackQuery, bot: Bot):
                 f"Ставка <b>{bet} 🪙</b> возвращена на твой баланс."
             )
 
+        if outcome == 1:
+            taunt = (await get_user_decorations(callback.from_user.id)).get("taunt")
+            if taunt:
+                res_text += f"\n\n{html.escape(taunt)}"
+
         await bot.send_message(chat_id, res_text, reply_markup=back_to_menu_keyboard(), parse_mode="HTML")
         await callback.answer()
 
@@ -337,7 +344,7 @@ async def cb_set_bet(callback: CallbackQuery, bot: Bot):
         duel_id = await create_duel(
             chat_id=callback.message.chat.id,
             creator_id=callback.from_user.id,
-            creator_name=callback.from_user.full_name,
+            creator_name=user.get("nickname") or callback.from_user.full_name,
             game_type=game_type,
             bet=bet,
             message_id=duel_msg.message_id
@@ -369,12 +376,14 @@ async def cb_accept_duel(callback: CallbackQuery, bot: Bot):
 
     # Проверяем баланс оппонента
     user = await get_or_create_user(callback.from_user.id, callback.from_user.username, callback.from_user.full_name)
+    opponent_name = user.get("nickname") or callback.from_user.full_name
+    opponent_display_name = html.escape(opponent_name)
     if user["balance"] < duel["bet"]:
         await callback.answer(f"❌ Недостаточно монет! Требуется {duel['bet']} 🪙, у вас {user['balance']} 🪙.", show_alert=True)
         return
 
     # Списываем ставку и переводим дуэль в статус playing
-    success = await accept_duel(duel_id, callback.from_user.id, callback.from_user.full_name)
+    success = await accept_duel(duel_id, callback.from_user.id, opponent_name)
     if not success:
         await callback.answer("❌ Ошибка при принятии дуэли.", show_alert=True)
         return
@@ -385,12 +394,13 @@ async def cb_accept_duel(callback: CallbackQuery, bot: Bot):
     game_emoji = get_game_emoji(game_type)
     game_title = GAME_NAMES.get(game_type, "Игру")
     chat_id = duel["chat_id"]
+    creator_display_name = html.escape(duel["creator_name"])
 
     # Обновляем сообщение дуэли
     await callback.message.edit_text(
         f"⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b> ⚔️\n\n"
-        f"🔴 <b>Игрок 1:</b> {duel['creator_name']}\n"
-        f"🔵 <b>Игрок 2:</b> {callback.from_user.mention_html()}\n"
+        f"🔴 <b>Игрок 1:</b> {creator_display_name}\n"
+        f"🔵 <b>Игрок 2:</b> {opponent_display_name}\n"
         f"🎮 <b>Дисциплина:</b> {game_title}\n"
         f"💰 <b>Банк на кону:</b> <code>{duel['bet'] * 2}</code> 🪙\n\n"
         f"<i>Приготовьтесь, судья разыгрывает снаряды...</i>",
@@ -400,13 +410,13 @@ async def cb_accept_duel(callback: CallbackQuery, bot: Bot):
     await asyncio.sleep(2)
 
     # 1. Бросок Создателя
-    await bot.send_message(chat_id, f"🔴 Бросок игрока <b>{duel['creator_name']}</b>:", parse_mode="HTML")
+    await bot.send_message(chat_id, f"🔴 Бросок игрока <b>{creator_display_name}</b>:", parse_mode="HTML")
     d1 = await bot.send_dice(chat_id=chat_id, emoji=game_emoji)
     val1 = d1.dice.value
     await asyncio.sleep(3.5)
 
     # 2. Бросок Оппонента
-    await bot.send_message(chat_id, f"🔵 Бросок игрока <b>{callback.from_user.full_name}</b>:", parse_mode="HTML")
+    await bot.send_message(chat_id, f"🔵 Бросок игрока <b>{opponent_display_name}</b>:", parse_mode="HTML")
     d2 = await bot.send_dice(chat_id=chat_id, emoji=game_emoji)
     val2 = d2.dice.value
     await asyncio.sleep(3.5)
@@ -421,9 +431,9 @@ async def cb_accept_duel(callback: CallbackQuery, bot: Bot):
         await record_duel_result(duel_id, duel["creator_id"], False, duel["creator_id"], callback.from_user.id, duel["bet"])
         res_text = (
             f"🏆 <b>ПОБЕДА ИГРОКА 1!</b> 🏆\n\n"
-            f"🔴 <b>{duel['creator_name']}:</b> {desc1}\n"
-            f"🔵 <b>{callback.from_user.full_name}:</b> {desc2}\n\n"
-            f"🎉 <b>{duel['creator_name']}</b> забирает весь банк <b>+{duel['bet'] * 2} 🪙</b>!\n"
+            f"🔴 <b>{creator_display_name}:</b> {desc1}\n"
+            f"🔵 <b>{opponent_display_name}:</b> {desc2}\n\n"
+            f"🎉 <b>{creator_display_name}</b> забирает весь банк <b>+{duel['bet'] * 2} 🪙</b>!\n"
             f"Красивая победа в клубе {SHOP_NAME}! 🔥"
         )
     elif outcome == -1:
@@ -431,9 +441,9 @@ async def cb_accept_duel(callback: CallbackQuery, bot: Bot):
         await record_duel_result(duel_id, callback.from_user.id, False, duel["creator_id"], callback.from_user.id, duel["bet"])
         res_text = (
             f"🏆 <b>ПОБЕДА ИГРОКА 2!</b> 🏆\n\n"
-            f"🔴 <b>{duel['creator_name']}:</b> {desc1}\n"
-            f"🔵 <b>{callback.from_user.full_name}:</b> {desc2}\n\n"
-            f"🎉 <b>{callback.from_user.mention_html()}</b> забирает весь банк <b>+{duel['bet'] * 2} 🪙</b>!\n"
+            f"🔴 <b>{creator_display_name}:</b> {desc1}\n"
+            f"🔵 <b>{opponent_display_name}:</b> {desc2}\n\n"
+            f"🎉 <b>{opponent_display_name}</b> забирает весь банк <b>+{duel['bet'] * 2} 🪙</b>!\n"
             f"Красивая победа в клубе {SHOP_NAME}! 🔥"
         )
     else:
@@ -441,10 +451,16 @@ async def cb_accept_duel(callback: CallbackQuery, bot: Bot):
         await record_duel_result(duel_id, None, True, duel["creator_id"], callback.from_user.id, duel["bet"])
         res_text = (
             f"🤝 <b>БОЕВАЯ НИЧЬЯ!</b> 🤝\n\n"
-            f"🔴 <b>{duel['creator_name']}:</b> {desc1}\n"
-            f"🔵 <b>{callback.from_user.full_name}:</b> {desc2}\n\n"
+            f"🔴 <b>{creator_display_name}:</b> {desc1}\n"
+            f"🔵 <b>{opponent_display_name}:</b> {desc2}\n\n"
             f"Оба бойца показали равный результат. Ставки возвращены участникам!"
         )
+
+    winner_id = duel["creator_id"] if outcome == 1 else callback.from_user.id if outcome == -1 else None
+    if winner_id:
+        taunt = (await get_user_decorations(winner_id)).get("taunt")
+        if taunt:
+            res_text += f"\n\n{html.escape(taunt)}"
 
     await bot.send_message(chat_id, res_text, parse_mode="HTML")
 
@@ -507,6 +523,11 @@ async def handle_chat_dice(message: Message):
     """
     user_id = message.from_user.id
     now = time.time()
+    await get_or_create_user(user_id, message.from_user.username, message.from_user.full_name)
+    from handlers.roulette import handle_active_turn_dice
+
+    if await handle_active_turn_dice(message):
+        return
 
     # Анти-спам проверка (1 бросок в 8 секунд для начисления наград)
     if user_id in dice_cooldowns and (now - dice_cooldowns[user_id]) < 8:

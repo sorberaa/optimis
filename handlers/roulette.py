@@ -1,8 +1,11 @@
 import asyncio
+import html
 import logging
+import random
 import re
 from typing import Dict, Any, List, Optional
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from config import SHOP_NAME
@@ -21,7 +24,10 @@ from database import (
     finish_roulette,
     cancel_roulette,
     update_balance,
-    get_or_create_user
+    get_or_create_user,
+    start_roulette,
+    get_user_decorations,
+    link_roulette_player_user
 )
 from handlers.games import GAME_EMOJIS, GAME_NAMES, describe_roll
 
@@ -138,6 +144,7 @@ def calculate_score(game_type: str, roll_value: int) -> int:
 def parse_participants_list(raw_text: str) -> List[str]:
     lines = raw_text.strip().split("\n")
     participants = []
+    seen = set()
     for line in lines:
         cleaned = line.strip()
         if not cleaned:
@@ -145,8 +152,10 @@ def parse_participants_list(raw_text: str) -> List[str]:
         if cleaned.startswith("/") or cleaned.startswith("Приз:") or cleaned.startswith("Игра:"):
             continue
         cleaned = re.sub(r"^(\d+[\.)\-]?\s*|[\-\•\*]\s*)", "", cleaned).strip()
-        if cleaned:
+        key = cleaned.casefold()
+        if cleaned and key not in seen:
             participants.append(cleaned)
+            seen.add(key)
     return participants
 
 def format_players_list(players: List[Dict[str, Any]], max_players: int) -> str:
@@ -155,29 +164,33 @@ def format_players_list(players: List[Dict[str, Any]], max_players: int) -> str:
 
     lines = []
     for i, p in enumerate(players, 1):
-        name = f"@{p['username']}" if p.get("username") else p["full_name"]
-        badge = f"{p['badge']} " if p.get("badge") else ""
+        name = p.get("display_name") or (f"@{p['username']}" if p.get("username") else p["full_name"])
+        name = html.escape(name)
+        badge = f"{html.escape(p['badge'])} " if p.get("badge") else ""
         lines.append(f"{i}. {badge}<b>{name}</b>")
 
     remaining = max_players - len(players)
     if remaining > 0:
         lines.append(f"<i>(Свободно мест: {remaining})</i>")
     else:
-        lines.append("🔥 <b>Все места заняты! Старт...</b>")
+        lines.append("🔥 <b>Все места заняты! Ожидаем запуска администратором.</b>")
 
     return "\n".join(lines)
 
 def roulette_post_keyboard(roulette_id: int, current_count: int, max_players: int) -> InlineKeyboardMarkup:
-    buttons = [
-        [
+    buttons: List[List[InlineKeyboardButton]] = []
+    if current_count < max_players:
+        buttons.append([
             InlineKeyboardButton(text=f"🎟 Записаться ({current_count}/{max_players})", callback_data=f"r_join:{roulette_id}"),
             InlineKeyboardButton(text="❌ Выйти", callback_data=f"r_leave:{roulette_id}")
-        ],
-        [
+        ])
+    else:
+        buttons.append([
             InlineKeyboardButton(text="▶️ Запустить (Админ)", callback_data=f"r_force_start:{roulette_id}"),
+        ])
+    buttons.append([
             InlineKeyboardButton(text="🚫 Отмена (Админ)", callback_data=f"r_cancel:{roulette_id}")
-        ]
-    ]
+        ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -279,6 +292,13 @@ async def cmd_load_list_game(message: Message):
         )
         return
 
+    if any(not participant.startswith("@") or len(participant) < 2 for participant in participants):
+        await message.reply(
+            "❌ Для игры с личными бросками укажите каждого участника через @username, "
+            "чтобы бот мог проверить, кто отправил стикер."
+        )
+        return
+
     set_wizard_state(message.from_user.id, message.chat.id, {
         "participants": participants,
         "chat_id": message.chat.id
@@ -335,20 +355,13 @@ async def cb_lg_prize(callback: CallbackQuery):
     data["prize"] = prize
 
     buttons = [
-        [
-            InlineKeyboardButton(text="⏱ Живой ход (2 мин / DQ)", callback_data="lg_start:live"),
-        ],
-        [
-            InlineKeyboardButton(text="⚡ Быстрый авто-бросок", callback_data="lg_start:fast")
-        ],
-        [
-            InlineKeyboardButton(text="❌ Отмена", callback_data="wiz_cancel")
-        ]
+        [InlineKeyboardButton(text="▶️ Начать игру", callback_data="lg_start:live")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="wiz_cancel")]
     ]
     await callback.message.edit_text(
         f"🎮 {GAME_NAMES.get(data['game_type'], '?')} | 🎁 {prize}\n"
-        f"👥 Участников: {len(data['participants'])}\n\n"
-        f"Режим проведения:",
+        f"👥 Участников: {len(data['participants'])}\n"
+        "Каждый игрок сам отправит 3 броска в чат. На ход — 2 минуты.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         parse_mode="HTML"
     )
@@ -385,8 +398,7 @@ async def cb_lg_start(callback: CallbackQuery, bot: Bot):
     asyncio.create_task(run_roulette_game(
         bot=bot,
         chat_id=chat_id,
-        roulette_id=r_id,
-        is_live_timer=(mode == "live")
+        roulette_id=r_id
     ))
 
 
@@ -403,6 +415,11 @@ async def cb_admin_quick_roulette(callback: CallbackQuery):
         await callback.answer("❌ Только для админов!", show_alert=True)
         return
 
+    join_prompt = (
+        "🎉 <i>Все места заняты! Администратор может запустить игру.</i>"
+        if count >= max_p
+        else "👇 <i>Жмите «Записаться»!</i>"
+    )
     text = (
         "🚀 <b>ПРЕМИУМ-ЗАПУСК РУЛЕТОК</b>\n\n"
         "Выберите готовый пресет или вернитесь к обычному мастеру."
@@ -459,7 +476,7 @@ async def cb_quick_roulette(callback: CallbackQuery, bot: Bot):
             f"🎁 Приз: <b>{prize}</b>\n"
             f"💰 Вход: {fee_text}\n"
             f"👥 Мест: <b>{slots}</b>\n"
-            f"⏱ 2 мин на ход или DQ!\n\n"
+            f"🎲 После запуска каждый участник сам отправляет 3 броска. На ход — 2 минуты.\n\n"
             f"<b>Участники (0/{slots}):</b>\n"
             f"<i>Свободно мест: {slots}</i>\n\n"
             f"👇 <i>Жмите «Записаться»!</i>"
@@ -638,7 +655,7 @@ async def cb_wiz_prize(callback: CallbackQuery, bot: Bot):
             f"🎁 Приз: <b>{prize}</b>\n"
             f"💰 Вход: {fee_text}\n"
             f"👥 Мест: <b>{slots}</b>\n"
-            f"⏱ 2 мин на ход или DQ!\n\n"
+            f"🎲 После запуска каждый участник сам отправляет 3 броска. На ход — 2 минуты.\n\n"
             f"<b>Участники (0/{slots}):</b>\n"
             f"<i>Свободно мест: {slots}</i>\n\n"
             f"👇 <i>Жмите «Записаться»!</i>"
@@ -668,13 +685,13 @@ async def cb_roulette_join(callback: CallbackQuery, bot: Bot):
     roulette_id = int(callback.data.split(":")[1])
     user = callback.from_user
 
-    await get_or_create_user(user.id, user.username, user.full_name)
+    account = await get_or_create_user(user.id, user.username, user.full_name)
 
     success, msg, count, max_p = await join_roulette(
         roulette_id=roulette_id,
         user_id=user.id,
         username=user.username,
-        full_name=user.full_name
+        full_name=account.get("nickname") or user.full_name
     )
 
     if not success:
@@ -690,16 +707,21 @@ async def cb_roulette_join(callback: CallbackQuery, bot: Bot):
     fee_text = f"<code>{roulette['entry_fee']}</code> 🪙" if roulette["entry_fee"] > 0 else "БЕСПЛАТНЫЙ"
     game_title = GAME_NAMES.get(roulette["game_type"], "Футбол")
 
+    join_prompt = (
+        "🎉 <i>Все места заняты! Администратор может запустить игру.</i>"
+        if count >= max_p
+        else "👇 <i>Жмите «Записаться»!</i>"
+    )
     text = (
         f"🎰 <b>РУЛЕТКА {SHOP_NAME}!</b> 🎰\n\n"
         f"🎮 {game_title}\n"
         f"🎁 Приз: <b>{roulette['prize']}</b>\n"
         f"💰 Вход: {fee_text}\n"
         f"👥 Мест: <b>{roulette['max_players']}</b>\n"
-        f"⏱ 2 мин на ход или DQ!\n\n"
+        f"🎲 По 3 личных броска на игрока. На ход — 2 минуты.\n\n"
         f"<b>Участники ({len(players)}/{roulette['max_players']}):</b>\n"
         f"{players_text}\n\n"
-        f"👇 <i>Жмите «Записаться»!</i>"
+        f"{join_prompt}"
     )
 
     try:
@@ -708,11 +730,30 @@ async def cb_roulette_join(callback: CallbackQuery, bot: Bot):
             reply_markup=roulette_post_keyboard(roulette_id, len(players), roulette["max_players"]),
             parse_mode="HTML"
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Could not update roulette post %s: %s", roulette_id, exc)
 
     if count >= max_p:
-        asyncio.create_task(run_roulette_game(bot, callback.message.chat.id, roulette_id, is_live_timer=True))
+        mentions = "\n".join(
+            f"• <a href=\"tg://user?id={p['user_id']}\">{html.escape(p.get('display_name') or p['full_name'])}</a>"
+            for p in players
+            if p["user_id"] > 0
+        )
+        await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=(
+                f"🚨 <b>Все места в игре #{roulette_id} заняты!</b>\n\n"
+                f"{mentions}\n\n"
+                "Ждём, пока администратор нажмёт «Запустить». Игра сама не начнётся."
+            ),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="▶️ Запустить игру (Админ)",
+                    callback_data=f"r_force_start:{roulette_id}"
+                )
+            ]]),
+            parse_mode="HTML"
+        )
 
 @router.callback_query(F.data.startswith("r_leave:"))
 async def cb_roulette_leave(callback: CallbackQuery):
@@ -763,17 +804,38 @@ async def cb_roulette_force_start(callback: CallbackQuery, bot: Bot):
         return
 
     roulette = await get_roulette(roulette_id)
-    if not roulette or roulette["status"] != "registration":
+    if not roulette or roulette["status"] not in ("registration", "ready"):
         await callback.answer("❌ Игра уже началась или завершена!", show_alert=True)
         return
 
     players = await get_roulette_players(roulette_id)
-    if len(players) < 2:
-        await callback.answer("❌ Нужно минимум 2 участника!", show_alert=True)
+    if roulette["status"] != "ready" or len(players) < roulette["max_players"]:
+        await callback.answer(
+            f"❌ Сначала должны заполниться все места ({len(players)}/{roulette['max_players']}).",
+            show_alert=True
+        )
         return
 
-    await callback.answer("🚀 Запуск...")
-    asyncio.create_task(run_roulette_game(bot, callback.message.chat.id, roulette_id, is_live_timer=True))
+    if not await start_roulette(roulette_id):
+        await callback.answer("❌ Эту игру уже запустили или её состояние изменилось.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"🚀 <b>Администратор запустил игру #{roulette_id}!</b>\n"
+        "Участники будут по очереди отправлять по 3 броска.",
+        parse_mode="HTML"
+    )
+    if roulette["message_id"] and roulette["message_id"] != callback.message.message_id:
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=roulette["chat_id"],
+                message_id=roulette["message_id"],
+                reply_markup=None
+            )
+        except TelegramBadRequest as exc:
+            logger.warning("Could not disable roulette controls for %s: %s", roulette_id, exc)
+    await callback.answer("🚀 Игра запускается!")
+    asyncio.create_task(run_roulette_game(bot, callback.message.chat.id, roulette_id))
 
 @router.callback_query(F.data.startswith("r_cancel:"))
 async def cb_roulette_cancel(callback: CallbackQuery):
@@ -797,32 +859,48 @@ async def cb_roulette_cancel(callback: CallbackQuery):
 # 4. ОБРАБОТЧИКИ ХОДА: БРОСОК ИЛИ DQ
 # =================================================================
 
-@router.callback_query(F.data.startswith("turn_roll:"))
-async def cb_turn_roll(callback: CallbackQuery, bot: Bot):
-    chat_id = int(callback.data.split(":")[1])
-    state = active_turn_states.get(chat_id)
-    if not state:
-        await callback.answer("Ход уже завершен.", show_alert=True)
-        return
+async def handle_active_turn_dice(message: Message) -> bool:
+    """Accepts a player's own Telegram dice message during their tournament turn."""
+    state = active_turn_states.get(message.chat.id)
+    if not state or not message.from_user:
+        return False
 
-    current_player = state["player"]
-    user = callback.from_user
+    player = state["player"]
+    user = message.from_user
+    expected_username = (player.get("username") or "").lstrip("@").lower()
+    is_turn_player = user.id == player.get("user_id") or (
+        expected_username and (user.username or "").lower() == expected_username
+    )
+    if not is_turn_player:
+        return False
 
-    is_turn_player = (user.id == current_player.get("user_id")) or \
-                     (user.username and f"@{user.username}".lower() == f"@{current_player.get('username', '')}".lower())
-    user_is_admin = await is_admin(user.id)
+    if player["user_id"] <= 0:
+        await get_or_create_user(user.id, user.username, user.full_name)
+        if await link_roulette_player_user(
+            state["roulette_id"],
+            player["user_id"],
+            user.id,
+            user.username,
+            user.full_name
+        ):
+            player["user_id"] = user.id
+            player["username"] = user.username
+            player["full_name"] = user.full_name
 
-    if not is_turn_player and not user_is_admin:
-        await callback.answer("❌ Не ваш ход!", show_alert=True)
-        return
+    if message.dice.emoji != state["emoji"]:
+        await message.reply(f"❌ Для этого хода нужен бросок {state['emoji']}.")
+        return True
 
-    game_emoji = state["emoji"]
-    d = await bot.send_dice(chat_id=chat_id, emoji=game_emoji)
-    val = d.dice.value
+    if len(state["roll_values"]) >= 3:
+        await message.reply("✅ Три броска уже приняты для этого хода.")
+        return True
 
-    state["roll_val"] = val
-    state["event"].set()
-    await callback.answer("🎲 Бросок сделан!")
+    state["roll_values"].append(message.dice.value)
+    roll_number = len(state["roll_values"])
+    await message.reply(f"✅ Бросок {roll_number}/3 принят.")
+    if roll_number == 3:
+        state["event"].set()
+    return True
 
 @router.callback_query(F.data.startswith("turn_dq:"))
 async def cb_turn_dq(callback: CallbackQuery):
@@ -845,7 +923,7 @@ async def cb_turn_dq(callback: CallbackQuery):
 # 5. ДВИЖОК ТУРНИРА + ТАЙМЕР 2 МИН (DQ)
 # =================================================================
 
-async def run_roulette_game(bot: Bot, chat_id: int, roulette_id: int, is_live_timer: bool = True):
+async def run_roulette_game(bot: Bot, chat_id: int, roulette_id: int):
     roulette = await get_roulette(roulette_id)
     if not roulette:
         return
@@ -858,15 +936,14 @@ async def run_roulette_game(bot: Bot, chat_id: int, roulette_id: int, is_live_ti
     game_emoji = GAME_EMOJIS.get(game_type, "⚽")
     game_title = GAME_NAMES.get(game_type, "Футбол")
 
-    timer_note = "⏱ <b>2 мин на ход или DQ!</b>\n\n" if is_live_timer else ""
-
     await bot.send_message(
         chat_id=chat_id,
         text=(
             f"🚨 <b>ТУРНИР НАЧИНАЕТСЯ!</b> 🚨\n\n"
             f"🎮 {game_title} | 🎁 {roulette['prize']}\n"
             f"👥 Участников: {len(players)}\n"
-            f"{timer_note}"
+            "🎲 Каждый участник сам отправляет 3 броска нужного типа.\n"
+            "⏱ <b>2 минуты на три броска или DQ!</b>\n\n"
             f"<i>Приготовьтесь...</i>"
         ),
         parse_mode="HTML"
@@ -876,88 +953,68 @@ async def run_roulette_game(bot: Bot, chat_id: int, roulette_id: int, is_live_ti
     scores = []
 
     for i, p in enumerate(players, 1):
-        name = f"@{p['username']}" if p.get("username") else p["full_name"]
-        badge = f"{p['badge']} " if p.get("badge") else ""
+        name = html.escape(p.get("display_name") or (f"@{p['username']}" if p.get("username") else p["full_name"]))
+        badge = f"{html.escape(p['badge'])} " if p.get("badge") else ""
         display_name = f"{badge}{name}"
 
-        if is_live_timer:
-            event = asyncio.Event()
-            active_turn_states[chat_id] = {
-                "player": p,
-                "emoji": game_emoji,
-                "event": event,
-                "roll_val": None,
-                "dq": False
-            }
+        event = asyncio.Event()
+        active_turn_states[chat_id] = {
+            "player": p,
+            "roulette_id": roulette_id,
+            "emoji": game_emoji,
+            "event": event,
+            "roll_values": [],
+            "dq": False
+        }
 
-            turn_kb = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(text=f"🎲 Бросок {game_emoji}", callback_data=f"turn_roll:{chat_id}")
-                ],
-                [
-                    InlineKeyboardButton(text="⏭ DQ (Админ)", callback_data=f"turn_dq:{chat_id}")
-                ]
-            ])
+        turn_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⏭ DQ (Админ)", callback_data=f"turn_dq:{chat_id}")
+        ]])
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"🎯 <b>Ход {i}/{len(players)}:</b> {display_name}\n\n"
+                f"Отправь в чат 3 анимированных броска {game_emoji} через меню стикеров Telegram.\n"
+                f"Не нажимай кнопки бота — броски отправляются тобой.\n"
+                "⏳ <b>2 минуты на ход.</b>"
+            ),
+            reply_markup=turn_kb,
+            parse_mode="HTML"
+        )
 
-            turn_msg = await bot.send_message(
+        try:
+            await asyncio.wait_for(event.wait(), timeout=120.0)
+        except asyncio.TimeoutError:
+            active_turn_states[chat_id]["dq"] = True
+
+        state = active_turn_states.pop(chat_id, {})
+        if state.get("dq"):
+            await bot.send_message(
                 chat_id=chat_id,
-                text=(
-                    f"🎯 <b>Ход {i}/{len(players)}:</b> {display_name}\n\n"
-                    f"Жми кнопку {game_emoji}\n"
-                    f"⏳ <b>2 мин или DQ!</b>"
-                ),
-                reply_markup=turn_kb,
+                text=f"⏰ <b>ВРЕМЯ!</b>\n❌ {display_name} — <b>DQ</b>",
                 parse_mode="HTML"
             )
+            await update_roulette_player_roll(roulette_id, p["user_id"], 0, -1)
+            scores.append({
+                "user_id": p["user_id"],
+                "name": display_name,
+                "roll": 0,
+                "score": -1,
+                "desc": "❌ DQ"
+            })
+            await asyncio.sleep(2)
+            continue
 
-            try:
-                await asyncio.wait_for(event.wait(), timeout=120.0)
-            except asyncio.TimeoutError:
-                active_turn_states[chat_id]["dq"] = True
-
-            state = active_turn_states.pop(chat_id, {})
-            try:
-                await turn_msg.delete()
-            except Exception:
-                pass
-
-            if state.get("dq"):
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"⏰ <b>ВРЕМЯ!</b>\n"
-                        f"❌ {display_name} — <b>DQ</b>"
-                    ),
-                    parse_mode="HTML"
-                )
-                await update_roulette_player_roll(roulette_id, p["user_id"], 0, -1)
-                scores.append({
-                    "user_id": p["user_id"],
-                    "name": display_name,
-                    "roll": 0,
-                    "score": -1,
-                    "desc": "❌ DQ"
-                })
-                await asyncio.sleep(2)
-                continue
-            else:
-                val = state["roll_val"]
-                await asyncio.sleep(3.5)
-
-        else:
-            await bot.send_message(chat_id, f"🎯 <b>Ход {i}/{len(players)}:</b> {display_name}...", parse_mode="HTML")
-            dice_msg = await bot.send_dice(chat_id=chat_id, emoji=game_emoji)
-            val = dice_msg.dice.value
-            await asyncio.sleep(3.5)
-
-        score = calculate_score(game_type, val)
-        await update_roulette_player_roll(roulette_id, p["user_id"], val, score)
-        desc = describe_roll(game_type, val)
+        roll_values = state["roll_values"]
+        score = sum(calculate_score(game_type, value) for value in roll_values)
+        roll_total = sum(roll_values)
+        await update_roulette_player_roll(roulette_id, p["user_id"], roll_total, score)
+        desc = " | ".join(describe_roll(game_type, value) for value in roll_values)
 
         scores.append({
             "user_id": p["user_id"],
             "name": display_name,
-            "roll": val,
+            "roll": roll_total,
             "score": score,
             "desc": desc
         })
@@ -980,30 +1037,10 @@ async def run_roulette_game(bot: Bot, chat_id: int, roulette_id: int, is_live_ti
             chat_id,
             f"⚔️ <b>НИЧЬЯ ({top_score} очков)!</b>\n"
             f"{tied_names}\n\n"
-            f"🔥 <b>СУПЕРФИНАЛ!</b>",
+            "🔥 Победителя определит жеребьёвка — дополнительные броски не нужны.",
             parse_mode="HTML"
         )
-        await asyncio.sleep(2.5)
-
-        while len(leaders) > 1:
-            tie_scores = []
-            for l in leaders:
-                await bot.send_message(chat_id, f"⚡ {l['name']}...", parse_mode="HTML")
-                d = await bot.send_dice(chat_id=chat_id, emoji=game_emoji)
-                val = d.dice.value
-                score = calculate_score(game_type, val)
-                tie_scores.append({"user_id": l["user_id"], "name": l["name"], "score": score, "roll": val})
-                await asyncio.sleep(3.5)
-
-            tie_scores.sort(key=lambda x: x["score"], reverse=True)
-            best_score = tie_scores[0]["score"]
-            leaders = [s for s in tie_scores if s["score"] == best_score]
-
-            if len(leaders) > 1:
-                await bot.send_message(chat_id, "🤝 Снова ничья! Ещё раз...")
-                await asyncio.sleep(2)
-
-        winner = leaders[0]
+        winner = random.choice(leaders)
     else:
         winner = active_scores[0]
 
@@ -1032,5 +1069,9 @@ async def run_roulette_game(bot: Bot, chat_id: int, roulette_id: int, is_live_ti
         f"🏆 <b>ПОБЕДИТЕЛЬ:</b> {winner['name']}!\n"
         f"🎁 <b>ПРИЗ:</b> {roulette['prize']}"
     )
+    if winner["user_id"] > 0:
+        decorations = await get_user_decorations(winner["user_id"])
+        if decorations.get("taunt"):
+            result_text += f"\n\n{html.escape(decorations['taunt'])}"
 
     await bot.send_message(chat_id, result_text, parse_mode="HTML")
