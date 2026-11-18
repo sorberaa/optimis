@@ -15,6 +15,7 @@ from database import (
     cancel_duel,
     record_duel_result,
     update_balance,
+    spend_balance,
     get_user_decorations
 )
 from keyboards.inline import (
@@ -47,9 +48,24 @@ GAME_NAMES = {
 
 # Кулдаун на броски эмодзи в чате (секунды): user_id -> timestamp
 dice_cooldowns: Dict[int, float] = {}
+MAX_DICE_COOLDOWNS = 5000
 
 def get_game_emoji(game_type: str) -> str:
     return GAME_EMOJIS.get(game_type, "🎲")
+
+def bet_prompt_text(game_title: str, user_balance: int, mode: str) -> str:
+    if user_balance <= 0:
+        hint = "Баланс пуст — забери бонус или заработай монеты в чат-играх."
+    elif user_balance < 25:
+        hint = "Для тебя доступен ва-банк на весь баланс."
+    else:
+        hint = "Выбери комфортную ставку. Показаны только доступные суммы."
+    prefix = "⚔️ Дуэль" if mode == "duel" else "🎲 Игра против бота"
+    return (
+        f"{prefix}: <b>{game_title}</b>\n\n"
+        f"💰 Баланс: <code>{user_balance}</code> 🪙\n"
+        f"{hint}"
+    )
 
 def describe_roll(game_type: str, value: int) -> str:
     """Текстовое описание результата броска эмодзи."""
@@ -208,11 +224,7 @@ async def cb_duel_game_selected(callback: CallbackQuery):
     user = await get_or_create_user(callback.from_user.id, callback.from_user.username, callback.from_user.full_name)
 
     game_title = GAME_NAMES.get(game_type, "Игру")
-    text = (
-        f"⚔️ <b>Создание дуэли: {game_title}</b>\n\n"
-        f"💰 Твой баланс: <code>{user['balance']}</code> 🪙\n"
-        f"Выберите сумму ставки:"
-    )
+    text = bet_prompt_text(game_title, user["balance"], "duel")
     await callback.message.edit_text(
         text,
         reply_markup=bet_selection_keyboard(mode="duel", game_type=game_type, user_balance=user["balance"]),
@@ -226,11 +238,7 @@ async def cb_solo_game_selected(callback: CallbackQuery):
     user = await get_or_create_user(callback.from_user.id, callback.from_user.username, callback.from_user.full_name)
 
     game_title = GAME_NAMES.get(game_type, "Игру")
-    text = (
-        f"🎲 <b>Игра против бота: {game_title}</b>\n\n"
-        f"💰 Твой баланс: <code>{user['balance']}</code> 🪙\n"
-        f"Выберите сумму ставки:"
-    )
+    text = bet_prompt_text(game_title, user["balance"], "solo")
     await callback.message.edit_text(
         text,
         reply_markup=bet_selection_keyboard(mode="solo", game_type=game_type, user_balance=user["balance"]),
@@ -241,9 +249,16 @@ async def cb_solo_game_selected(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("set_bet:"))
 async def cb_set_bet(callback: CallbackQuery, bot: Bot):
     parts = callback.data.split(":")
+    if len(parts) != 4 or parts[1] not in {"solo", "duel"} or parts[2] not in GAME_EMOJIS:
+        await callback.answer("Эта игровая кнопка устарела. Открой игру заново.", show_alert=True)
+        return
     mode = parts[1]
     game_type = parts[2]
-    bet = int(parts[3])
+    try:
+        bet = int(parts[3])
+    except ValueError:
+        await callback.answer("Некорректная ставка.", show_alert=True)
+        return
 
     user = await get_user(callback.from_user.id)
     if not user or user["balance"] < bet or bet <= 0:
@@ -255,7 +270,9 @@ async def cb_set_bet(callback: CallbackQuery, bot: Bot):
 
     if mode == "solo":
         # Игра против бота
-        await update_balance(callback.from_user.id, -bet)
+        if not await spend_balance(callback.from_user.id, bet):
+            await callback.answer("Баланс изменился — обнови игру и выбери ставку снова.", show_alert=True)
+            return
         await callback.message.edit_text(
             f"🎲 <b>Раунд против бота начался!</b>\n"
             f"Дисциплина: {game_title}\n"
@@ -349,6 +366,12 @@ async def cb_set_bet(callback: CallbackQuery, bot: Bot):
             bet=bet,
             message_id=duel_msg.message_id
         )
+        if not duel_id:
+            await duel_msg.edit_text(
+                "❌ Вызов не создан: баланс изменился или средств не хватает. Попробуй снова."
+            )
+            await callback.answer("Ставка не списана.", show_alert=True)
+            return
 
         # Обновляем кнопку с правильным duel_id
         await duel_msg.edit_reply_markup(reply_markup=duel_invitation_keyboard(duel_id, bet))
@@ -385,7 +408,7 @@ async def cb_accept_duel(callback: CallbackQuery, bot: Bot):
     # Списываем ставку и переводим дуэль в статус playing
     success = await accept_duel(duel_id, callback.from_user.id, opponent_name)
     if not success:
-        await callback.answer("❌ Ошибка при принятии дуэли.", show_alert=True)
+        await callback.answer("❌ Не удалось принять: дуэль занята или не хватает монет.", show_alert=True)
         return
 
     await callback.answer("⚔️ Вы приняли вызов! Да начнется битва!")
@@ -530,8 +553,13 @@ async def handle_chat_dice(message: Message):
         return
 
     # Анти-спам проверка (1 бросок в 8 секунд для начисления наград)
-    if user_id in dice_cooldowns and (now - dice_cooldowns[user_id]) < 8:
-        return
+    last_reward = dice_cooldowns.get(user_id)
+    if last_reward is not None:
+        if now - last_reward < 8:
+            dice_cooldowns.pop(user_id)
+            dice_cooldowns[user_id] = last_reward
+            return
+        dice_cooldowns.pop(user_id, None)
 
     dice = message.dice
     emoji = dice.emoji
@@ -578,8 +606,10 @@ async def handle_chat_dice(message: Message):
             congrats = f"🎰 <b>Три в ряд!</b> Выигрышная линия от {message.from_user.mention_html()}! (+25 🪙)"
 
     if reward > 0:
+        dice_cooldowns.pop(user_id, None)
         dice_cooldowns[user_id] = now
-        await get_or_create_user(user_id, message.from_user.username, message.from_user.full_name)
+        if len(dice_cooldowns) > MAX_DICE_COOLDOWNS:
+            dice_cooldowns.pop(next(iter(dice_cooldowns)))
         await update_balance(user_id, reward)
         # Ждем 3.5 секунды пока проиграется анимация стикера
         await asyncio.sleep(3.5)

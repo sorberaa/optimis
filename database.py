@@ -223,6 +223,19 @@ async def init_db():
                 (admin_id,)
             )
 
+        for index_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_roulettes_chat_status_id ON roulettes(chat_id, status, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_roulette_players_user_id ON roulette_players(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_duels_creator_status ON duels(creator_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_duels_opponent_status ON duels(opponent_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_users_balance_rank ON users(balance DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_users_wins_rank ON users(wins DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_users_recent ON users(created_at DESC, user_id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_user_dragons_rank ON user_dragons(level DESC, power DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_purchases_user_recent ON purchases(user_id, purchased_at DESC)"
+        ]:
+            await db.execute(index_sql)
+
         await db.commit()
 
 # ==========================================
@@ -438,6 +451,18 @@ async def update_balance(user_id: int, amount: int) -> int:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
+async def spend_balance(user_id: int, amount: int) -> bool:
+    """Atomically deduct a positive stake only when the user can afford it."""
+    if user_id <= 0 or amount <= 0:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
+            (amount, user_id, amount)
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
 async def claim_daily_bonus(user_id: int) -> tuple[bool, int, Optional[str], int]:
     """
     Получение прогрессивного ежедневного бонуса (стрик дней).
@@ -555,14 +580,22 @@ async def get_all_admins() -> List[Dict[str, Any]]:
 
 async def create_duel(chat_id: int, creator_id: int, creator_name: str, game_type: str, bet: int, message_id: int) -> int:
     """Создает запись дуэли и списывает ставку создателя."""
+    if bet <= 0:
+        return 0
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, creator_id))
+        cursor = await db.execute(
+            "UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
+            (bet, creator_id, bet)
+        )
+        if cursor.rowcount == 0:
+            await db.rollback()
+            return 0
         cursor = await db.execute(
             """INSERT INTO duels (chat_id, creator_id, creator_name, game_type, bet, message_id, status)
                VALUES (?, ?, ?, ?, ?, ?, 'waiting')""",
             (chat_id, creator_id, creator_name, game_type, bet, message_id)
         )
-        duel_id = cursor.lastrowid
+        duel_id = cursor.lastrowid or 0
         await db.commit()
         return duel_id
 
@@ -598,21 +631,31 @@ async def accept_duel(duel_id: int, opponent_id: int, opponent_name: str) -> boo
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT * FROM duels WHERE id = ? AND status = 'waiting'", (duel_id,)) as cursor:
             duel = await cursor.fetchone()
             if not duel:
+                await db.rollback()
                 return False
+        if opponent_id == duel["creator_id"]:
+            await db.rollback()
+            return False
 
-        # Атомарно занимаем дуэль
+        cursor = await db.execute(
+            "UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
+            (duel["bet"], opponent_id, duel["bet"])
+        )
+        if cursor.rowcount == 0:
+            await db.rollback()
+            return False
+
         cursor = await db.execute(
             "UPDATE duels SET opponent_id = ?, opponent_name = ?, status = 'playing' WHERE id = ? AND status = 'waiting'",
             (opponent_id, opponent_name, duel_id)
         )
         if cursor.rowcount == 0:
-            return False  # Кто-то другой уже нажал кнопку на миллисекунду раньше
-
-        # Списываем ставку оппонента
-        await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (duel["bet"], opponent_id))
+            await db.rollback()
+            return False
         await db.commit()
         return True
 
@@ -1047,6 +1090,36 @@ DRAGON_STAGES = {
     5: {"name": "👑 Дракон-Титан Optimus", "min_lvl": 15}
 }
 
+DRAGON_EXPEDITIONS = {
+    "forest": {
+        "name": "🌲 Зачарованный Лес",
+        "min_lvl": 1,
+        "energy_cost": 20,
+        "cooldown_min": 15,
+        "success_rate": 85,
+        "reward_coins": (5, 15),
+        "reward_xp": 20
+    },
+    "cave": {
+        "name": "⛰️ Пещера Черепа",
+        "min_lvl": 4,
+        "energy_cost": 35,
+        "cooldown_min": 60,
+        "success_rate": 70,
+        "reward_coins": (20, 45),
+        "reward_xp": 50
+    },
+    "volcano": {
+        "name": "🌋 Вулкан Древних Титанов",
+        "min_lvl": 8,
+        "energy_cost": 50,
+        "cooldown_min": 180,
+        "success_rate": 55,
+        "reward_coins": (50, 100),
+        "reward_xp": 110
+    }
+}
+
 def get_dragon_stage(level: int) -> int:
     if level >= 15:
         return 5
@@ -1065,23 +1138,23 @@ async def get_or_create_dragon(user_id: int) -> Dict[str, Any]:
     """Получает дракона игрока или создает нового в стадии яйца."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT * FROM user_dragons WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
-                await db.rollback()
                 return dict(row)
 
+        await db.execute("BEGIN IMMEDIATE")
         await db.execute("""
             INSERT INTO user_dragons (
                 user_id, name, element, stage, level, xp, energy, max_energy, power
             ) VALUES (?, 'Огнекрыл', '🔥 Огонь', 1, 1, 0, 100, 100, 15)
+            ON CONFLICT(user_id) DO NOTHING
         """, (user_id,))
-        await db.commit()
 
         async with db.execute("SELECT * FROM user_dragons WHERE user_id = ?", (user_id,)) as cursor:
-            new_row = await cursor.fetchone()
-            return dict(new_row)
+            row = await cursor.fetchone()
+        await db.commit()
+        return dict(row)
 
 async def feed_dragon(user_id: int, item_key: Optional[str] = None) -> tuple[bool, str, Dict[str, Any]]:
     """Кормление дракона (бесплатно раз в час или специальным предметом)."""
@@ -1288,37 +1361,7 @@ async def send_dragon_expedition(user_id: int, exp_type: str) -> tuple[bool, str
             await db.rollback()
             return False, "🥚 Яйцо не может летать в экспедиции! Сначала согрейте и покормите его.", dragon
 
-        configs = {
-            "forest": {
-                "name": "🌲 Зачарованный Лес",
-                "min_lvl": 1,
-                "energy_cost": 20,
-                "cooldown_min": 15,
-                "success_rate": 85,
-                "reward_coins": (5, 15),
-                "reward_xp": 20
-            },
-            "cave": {
-                "name": "⛰️ Пещера Черепа",
-                "min_lvl": 4,
-                "energy_cost": 35,
-                "cooldown_min": 60,
-                "success_rate": 70,
-                "reward_coins": (20, 45),
-                "reward_xp": 50
-            },
-            "volcano": {
-                "name": "🌋 Вулкан Древних Титанов",
-                "min_lvl": 8,
-                "energy_cost": 50,
-                "cooldown_min": 180,
-                "success_rate": 55,
-                "reward_coins": (50, 100),
-                "reward_xp": 110
-            }
-        }
-
-        conf = configs.get(exp_type)
+        conf = DRAGON_EXPEDITIONS.get(exp_type)
         if not conf:
             await db.rollback()
             return False, "Неизвестная экспедиция.", dragon

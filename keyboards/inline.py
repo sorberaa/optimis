@@ -51,29 +51,32 @@ def games_selection_keyboard(mode: str = "duel") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def bet_selection_keyboard(mode: str, game_type: str, user_balance: int) -> InlineKeyboardMarkup:
-    """Выбор ставки для выбранной игры."""
-    bets = [25, 50, 100, 250, 500]
-    row1 = []
-    row2 = []
-
-    for b in bets[:3]:
-        row1.append(InlineKeyboardButton(text=f"{b} 🪙", callback_data=f"set_bet:{mode}:{game_type}:{b}"))
-    for b in bets[3:]:
-        row2.append(InlineKeyboardButton(text=f"{b} 🪙", callback_data=f"set_bet:{mode}:{game_type}:{b}"))
-
-    # Кнопка Ва-банк (если баланс больше 0)
-    all_in_btn = []
-    if user_balance > 0:
-        all_in_btn.append(InlineKeyboardButton(text=f"🔥 Ва-банк ({user_balance} 🪙)", callback_data=f"set_bet:{mode}:{game_type}:{user_balance}"))
-
+    """Показывает только ставки, доступные игроку."""
+    affordable = [bet for bet in (25, 50, 100, 250, 500) if bet <= user_balance]
     buttons = [
-        row1,
-        row2,
-        all_in_btn,
-        [InlineKeyboardButton(text="⬅️ Назад к играм", callback_data=f"menu_{mode}")]
+        [
+            InlineKeyboardButton(
+                text=f"{bet} 🪙",
+                callback_data=f"set_bet:{mode}:{game_type}:{bet}"
+            )
+            for bet in affordable[index:index + 3]
+        ]
+        for index in range(0, len(affordable), 3)
     ]
-    # фильтруем пустые строки
-    buttons = [r for r in buttons if r]
+
+    if user_balance > 0 and user_balance not in affordable:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🔥 Ва-банк ({user_balance} 🪙)",
+                callback_data=f"set_bet:{mode}:{game_type}:{user_balance}"
+            )
+        ])
+    elif user_balance <= 0:
+        buttons.append([
+            InlineKeyboardButton(text="🎁 Забрать бонус", callback_data="bonus")
+        ])
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад к играм", callback_data=f"menu_{mode}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def duel_invitation_keyboard(duel_id: int, bet: int) -> InlineKeyboardMarkup:

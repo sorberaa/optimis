@@ -6,6 +6,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from database import (
+    DRAGON_EXPEDITIONS,
     DRAGON_STAGES,
     claim_dragon_income,
     feed_dragon,
@@ -43,6 +44,19 @@ ITEMS = {
     "crystal": "✨ Кристалл эволюции",
 }
 
+EXPEDITION_LABELS = {
+    "forest": "🌲 Лес",
+    "cave": "⛰️ Пещера",
+    "volcano": "🌋 Вулкан",
+}
+
+
+def progress_bar(value: int, maximum: int, width: int = 10) -> str:
+    if maximum <= 0:
+        return "⬜" * width
+    filled = min(width, max(0, int(value * width / maximum)))
+    return "🟩" * filled + "⬜" * (width - filled)
+
 
 def dragon_keyboard(dragon: Dict[str, Any], inventory: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     buttons = [
@@ -59,20 +73,39 @@ def dragon_keyboard(dragon: Dict[str, Any], inventory: List[Dict[str, Any]]) -> 
             ])
 
     buttons.append([
-        InlineKeyboardButton(text="🥊 Тренировка", callback_data="dragon:train"),
-        InlineKeyboardButton(text="💰 Собрать дань", callback_data="dragon:income")
+        InlineKeyboardButton(
+            text="🥊 Тренировка" if dragon["stage"] > 1 else "🥚 Сначала вылупи",
+            callback_data="dragon:train"
+        ),
+        InlineKeyboardButton(
+            text="💰 Собрать дань" if dragon["stage"] > 1 else "🥚 Дань после вылупления",
+            callback_data="dragon:income"
+        )
     ])
-    buttons.append([
-        InlineKeyboardButton(text="🌲 Лес", callback_data="dragon:exp:forest"),
-        InlineKeyboardButton(text="⛰️ Пещера", callback_data="dragon:exp:cave"),
-        InlineKeyboardButton(text="🌋 Вулкан", callback_data="dragon:exp:volcano")
-    ])
+    expedition_buttons = []
+    for key, expedition in DRAGON_EXPEDITIONS.items():
+        label = EXPEDITION_LABELS[key]
+        if dragon["stage"] == 1:
+            label = f"🥚 {label} · после вылупления"
+        elif dragon["level"] < expedition["min_lvl"]:
+            label = f"🔒 {label} · ур. {expedition['min_lvl']}"
+        else:
+            cost = expedition["energy_cost"] - (5 if "Лёд" in dragon["element"] else 0)
+            label = f"{label} · {cost}⚡"
+        expedition_buttons.append(
+            InlineKeyboardButton(text=label, callback_data=f"dragon:exp:{key}")
+        )
+    buttons.append(expedition_buttons)
     if dragon["level"] < 2:
         buttons.append([
             InlineKeyboardButton(text="🎨 Выбрать стихию", callback_data="dragon:elements")
         ])
     buttons.append([
+        InlineKeyboardButton(text="🛍 Магазин", callback_data="shop"),
         InlineKeyboardButton(text="🏆 Топ драконов", callback_data="dragon:top")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -81,24 +114,32 @@ def dragon_status(dragon: Dict[str, Any], inventory: List[Dict[str, Any]]) -> st
     stage = DRAGON_STAGES[dragon["stage"]]
     required_xp = xp_for_next_level(dragon["level"])
     story = STAGE_STORY.get(dragon["stage"], STAGE_STORY[1])
+    next_stage = next(
+        (stage_data for stage_data in DRAGON_STAGES.values() if stage_data["min_lvl"] > dragon["level"]),
+        None
+    )
+    milestone = (
+        f"Следующая стадия: {next_stage['name']} — уровень {next_stage['min_lvl']}"
+        if next_stage else "Все стадии открыты — стань сильнейшим драконом клуба!"
+    )
     inventory_text = ", ".join(
         f"{item['title']} ×{item['quantity']}" for item in inventory if item["quantity"] > 0
     ) or "пусто"
     return (
-        f"🐉 <b>ДРАКОНОВОД Optimus</b>\n\n"
-        f"<i>{story}</i>\n\n"
-        f"🏷 Имя: <b>{html.escape(dragon['name'])}</b>\n"
-        f"🌈 Стихия: <b>{html.escape(dragon['element'])}</b>\n"
-        f"🐲 Стадия: <b>{stage['name']}</b>\n"
-        f"⭐ Уровень: <b>{dragon['level']}</b> | Опыт: <code>{dragon['xp']}/{required_xp}</code>\n"
-        f"⚡ Энергия: <code>{dragon['energy']}/{dragon['max_energy']}</code>\n"
-        f"💪 Сила: <b>{dragon['power']}</b>\n"
-        f"🧭 Экспедиции: {dragon['expeditions_count']} | Успехи: {dragon['wins_count']}\n"
-        f"🎒 Игровые припасы: {html.escape(inventory_text)}\n\n"
-        "<b>Как растить:</b> бесплатное кормление раз в час; тренировка тратит 25 энергии "
-        "и даёт опыт/силу; экспедиции приносят монеты и опыт, но расходуют энергию. "
-        "Дань из логова доступна раз в 12 часов.\n"
-        "Все покупки — только виртуальные эффекты и припасы внутри игры."
+        f"╭━━━ 🐉 <b>ДРАКОНЬЯ ГИЛЬДИЯ</b> ━━━╮\n"
+        f"│ <b>{html.escape(dragon['name'])}</b> · {html.escape(dragon['element'])}\n"
+        f"│ {stage['name']} · <b>УРОВЕНЬ {dragon['level']}</b>\n"
+        f"├━━━━━━━━━━━━━━━━━━━━\n"
+        f"│ ✨ Опыт  {progress_bar(dragon['xp'], required_xp)}  {dragon['xp']}/{required_xp}\n"
+        f"│ ⚡ Силы  {progress_bar(dragon['energy'], dragon['max_energy'])}  "
+        f"{dragon['energy']}/{dragon['max_energy']}\n"
+        f"│ 💪 Мощь <b>{dragon['power']}</b>   🧭 Походы <b>{dragon['expeditions_count']}</b>\n"
+        f"│ 🏆 Победы <b>{dragon['wins_count']}</b>\n"
+        f"╰━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<i>{story}</i>\n"
+        f"🎯 <b>Цель:</b> {milestone}\n\n"
+        f"🎒 <b>Припасы:</b> {html.escape(inventory_text)}\n"
+        "Выбери действие ниже — яйцо растёт от заботы, а дракон становится сильнее в походах."
     )
 
 
@@ -141,11 +182,12 @@ async def refresh_dragon(callback: CallbackQuery, notice: str = ""):
     text = dragon_status(dragon, inventory)
     if notice:
         text = f"{notice}\n\n{text}"
-    await callback.message.edit_text(
-        text,
-        reply_markup=dragon_keyboard(dragon, inventory),
-        parse_mode="HTML"
-    )
+    if callback.message.text != text:
+        await callback.message.edit_text(
+            text,
+            reply_markup=dragon_keyboard(dragon, inventory),
+            parse_mode="HTML"
+        )
 
 
 @router.callback_query(F.data == "dragon:feed")
@@ -222,7 +264,8 @@ async def cmd_rename_dragon(message: Message):
     if not new_name:
         await message.reply("Использование: <code>/dragon_name Новое имя</code>", parse_mode="HTML")
         return
-    dragon = await get_or_create_dragon(message.from_user.id)
+    await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    await get_or_create_dragon(message.from_user.id)
     if not await rename_dragon(message.from_user.id, new_name):
         await message.reply("Имя должно содержать хотя бы один символ.")
         return
@@ -240,7 +283,7 @@ async def cb_dragon_top(callback: CallbackQuery):
         name = html.escape(dragon["full_name"] or dragon["username"] or str(dragon["user_id"]))
         dragon_name = html.escape(dragon["name"])
         rows.append(
-            f"{rank}. <b>{name}</b> — {dragon['stage']} стадия, "
+            f"{rank}. <b>{name}</b> — {DRAGON_STAGES[dragon['stage']]['name']}, "
             f"{dragon['level']} ур., {dragon['power']} 💪 ({dragon_name})"
         )
     text = "🏆 <b>СИЛЬНЕЙШИЕ ДРАКОНЫ</b>\n\n" + ("\n".join(rows) or "Пока нет драконов.")

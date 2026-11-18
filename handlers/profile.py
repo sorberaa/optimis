@@ -4,7 +4,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from config import SHOP_NAME
-from database import get_or_create_user, claim_daily_bonus, get_top_players, get_user_decorations
+from database import get_or_create_user, claim_daily_bonus, get_top_players
 from keyboards.inline import profile_keyboard, top_keyboard, back_to_menu_keyboard
 
 router = Router()
@@ -12,9 +12,10 @@ router = Router()
 @router.message(Command("profile", "me", "stats"))
 async def cmd_profile(message: Message):
     user = await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-    decorations = await get_user_decorations(message.from_user.id)
-    badge_text = f"Титул: <b>{decorations['badge']}</b>\n" if decorations["badge"] else ""
-    aura_text = f"Аура: <b>{decorations['aura']}</b>\n" if decorations["aura"] else ""
+    badge = user.get("badge") or ""
+    aura = user.get("aura") or ""
+    badge_text = f"Титул: <b>{badge}</b>\n" if badge else ""
+    aura_text = f"Аура: <b>{aura}</b>\n" if aura else ""
     nickname_text = (
         f"Игровой ник: <b>{html.escape(user['nickname'])}</b>\n"
         if user.get("nickname") else ""
@@ -37,9 +38,10 @@ async def cmd_profile(message: Message):
 @router.callback_query(F.data == "profile")
 async def cb_profile(callback: CallbackQuery):
     user = await get_or_create_user(callback.from_user.id, callback.from_user.username, callback.from_user.full_name)
-    decorations = await get_user_decorations(callback.from_user.id)
-    badge_text = f"Титул: <b>{decorations['badge']}</b>\n" if decorations["badge"] else ""
-    aura_text = f"Аура: <b>{decorations['aura']}</b>\n" if decorations["aura"] else ""
+    badge = user.get("badge") or ""
+    aura = user.get("aura") or ""
+    badge_text = f"Титул: <b>{badge}</b>\n" if badge else ""
+    aura_text = f"Аура: <b>{aura}</b>\n" if aura else ""
     nickname_text = (
         f"Игровой ник: <b>{html.escape(user['nickname'])}</b>\n"
         if user.get("nickname") else ""

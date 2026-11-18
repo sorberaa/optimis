@@ -5,9 +5,7 @@ from config import SHOP_NAME
 from database import (
     get_or_create_user,
     get_shop_items,
-    get_shop_item,
     buy_item,
-    get_user_badge,
     get_user_decorations,
     get_user_inventory,
 )
@@ -18,7 +16,7 @@ router = Router()
 @router.message(Command("shop"))
 async def cmd_shop(message: Message):
     user = await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-    badge = await get_user_badge(message.from_user.id)
+    badge = user.get("badge") or ""
     badge_str = f" | Ник: <b>{badge}</b>" if badge else ""
 
     items = await get_shop_items()
@@ -33,7 +31,7 @@ async def cmd_shop(message: Message):
 @router.callback_query(F.data == "shop")
 async def cb_shop(callback: CallbackQuery):
     user = await get_or_create_user(callback.from_user.id, callback.from_user.username, callback.from_user.full_name)
-    badge = await get_user_badge(callback.from_user.id)
+    badge = user.get("badge") or ""
     badge_str = f" | Ник: <b>{badge}</b>" if badge else ""
 
     items = await get_shop_items()
@@ -49,14 +47,8 @@ async def cb_shop(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("shop_buy:"))
 async def cb_shop_buy(callback: CallbackQuery):
     item_id = int(callback.data.split(":")[1])
-    item = await get_shop_item(item_id)
-
-    if not item:
-        await callback.answer("❌ Товар не найден!", show_alert=True)
-        return
-
     success, msg, purchased_item = await buy_item(callback.from_user.id, item_id)
-    if not success:
+    if not success or purchased_item is None:
         await callback.answer(msg, show_alert=True)
         return
 
