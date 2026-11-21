@@ -123,6 +123,56 @@ class DatabaseOptimizationTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_craft_and_smoke_economy(self):
+        async def run():
+            await database.init_db()
+            await database.get_or_create_user(403, "smoker", "Smoker")
+            await database.set_account_balance(403, 500)
+
+            hemp = await database.get_or_create_hemp(403)
+            if hemp["leaves"] < 3:
+                async with database.aiosqlite.connect(database.DB_PATH) as db:
+                    await db.execute("UPDATE user_hemp SET leaves = 3 WHERE user_id = ?", (403,))
+                    await db.commit()
+
+            crafted = await database.craft_joint(403)
+            self.assertTrue(crafted[0])
+            hemp = await database.get_or_create_hemp(403)
+            self.assertEqual(hemp["joints"], 1)
+
+            smoked = await database.smoke_joint(403)
+            self.assertTrue(smoked[0])
+            hemp = await database.get_or_create_hemp(403)
+            self.assertEqual(hemp["joints"], 0)
+            balance = await database.get_user(403)
+            self.assertEqual(balance["balance"], 510)
+
+        asyncio.run(run())
+
+    def test_bong_shop_and_economy(self):
+        async def run():
+            await database.init_db()
+            await database.get_or_create_user(404, "bonguser", "Bong User")
+            await database.set_account_balance(404, 500)
+
+            items = await database.get_shop_items()
+            bong = next(item for item in items if item["content"] == "bong")
+            bought = await database.buy_item(404, bong["id"])
+            self.assertTrue(bought[0])
+
+            async with database.aiosqlite.connect(database.DB_PATH) as db:
+                await db.execute("UPDATE user_hemp SET leaves = 2 WHERE user_id = ?", (404,))
+                await db.commit()
+
+            smoked = await database.smoke_bong(404)
+            self.assertTrue(smoked[0])
+            hemp = await database.get_or_create_hemp(404)
+            self.assertEqual(hemp["leaves"], 0)
+            balance = await database.get_user(404)
+            self.assertEqual(balance["balance"], 262)
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

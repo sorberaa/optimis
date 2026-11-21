@@ -6,11 +6,14 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from database import (
     collect_hemp,
+    craft_joint,
     get_or_create_hemp,
     get_or_create_user,
     harvest_hemp,
     plant_hemp,
     sell_hemp,
+    smoke_bong,
+    smoke_joint,
 )
 
 router = Router()
@@ -25,6 +28,11 @@ def hemp_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="🧺 Собрать урожай", callback_data="hemp:harvest"),
             InlineKeyboardButton(text="💵 Продать всё", callback_data="hemp:sell")
+        ],
+        [
+            InlineKeyboardButton(text="🌿 Скрутить", callback_data="hemp:craft"),
+            InlineKeyboardButton(text="💨 Дунуть", callback_data="hemp:smoke"),
+            InlineKeyboardButton(text="💧 Бонг", callback_data="hemp:bong")
         ]
     ])
 
@@ -35,6 +43,7 @@ def hemp_status(hemp: dict) -> str:
     return (
         f"🌿 У тебя: <b>{hemp['leaves']}</b>\n"
         f"🌱 Семян: <b>{hemp['seed_stock']}</b>\n"
+        f"🚬 Косяков: <b>{hemp['joints']}</b>\n"
         f"Грядки: <b>{active}/{plots}</b>"
     )
 
@@ -96,6 +105,42 @@ async def cmd_sell_hemp(message: Message):
         )
     else:
         await message.answer("🌿 В амбаре пока нет листьев для продажи.", reply_markup=hemp_keyboard(), parse_mode="HTML")
+
+
+@router.message(Command("craft", "joint", "скрутить", "скрутить_косяк"))
+async def cmd_craft_joint(message: Message):
+    await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    success, notice, hemp = await craft_joint(message.from_user.id)
+    if success:
+        await message.answer(
+            f"🚬 <b>{html.escape(notice)}</b>\nУ тебя косяков: <b>{hemp['joints']}</b>",
+            reply_markup=hemp_keyboard(),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(f"🌿 {html.escape(notice)}", reply_markup=hemp_keyboard(), parse_mode="HTML")
+
+
+@router.message(Command("smoke", "smoke_joint", "дунуть"))
+async def cmd_smoke_joint(message: Message):
+    await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    success, notice, hemp = await smoke_joint(message.from_user.id)
+    await message.answer(
+        f"💨 {html.escape(notice)}" if success else f"⏳ {html.escape(notice)}",
+        reply_markup=hemp_keyboard(),
+        parse_mode="HTML"
+    )
+
+
+@router.message(Command("bong", "smoke_bong", "покурить", "покурить_из_бонга"))
+async def cmd_smoke_bong(message: Message):
+    await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    success, notice, hemp = await smoke_bong(message.from_user.id)
+    await message.answer(
+        f"💧 {html.escape(notice)}" if success else f"🌿 {html.escape(notice)}",
+        reply_markup=hemp_keyboard(),
+        parse_mode="HTML"
+    )
 
 
 @router.message(Command("harvest"))
@@ -164,6 +209,30 @@ async def cb_hemp_sell(callback: CallbackQuery):
         text = "🌿 В амбаре пока нет листьев."
     await callback.message.edit_text(text, reply_markup=hemp_keyboard(), parse_mode="HTML")
     await callback.answer("Продано!" if success else "Нечего продавать.", show_alert=not success)
+
+
+@router.callback_query(F.data == "hemp:craft")
+async def cb_hemp_craft(callback: CallbackQuery):
+    success, notice, hemp = await craft_joint(callback.from_user.id)
+    text = f"🚬 {notice}" if success else f"🌿 {notice}"
+    await callback.message.edit_text(text, reply_markup=hemp_keyboard(), parse_mode="HTML")
+    await callback.answer("Косяк готов!" if success else "Не получилось.", show_alert=not success)
+
+
+@router.callback_query(F.data == "hemp:smoke")
+async def cb_hemp_smoke(callback: CallbackQuery):
+    success, notice, hemp = await smoke_joint(callback.from_user.id)
+    text = f"💨 {notice}" if success else f"⏳ {notice}"
+    await callback.message.edit_text(text, reply_markup=hemp_keyboard(), parse_mode="HTML")
+    await callback.answer("Дунул!" if success else "Нельзя дунуть.", show_alert=not success)
+
+
+@router.callback_query(F.data == "hemp:bong")
+async def cb_hemp_bong(callback: CallbackQuery):
+    success, notice, hemp = await smoke_bong(callback.from_user.id)
+    text = f"💧 {notice}" if success else f"🌿 {notice}"
+    await callback.message.edit_text(text, reply_markup=hemp_keyboard(), parse_mode="HTML")
+    await callback.answer("Дунул из бонга!" if success else "Нет бонга.", show_alert=not success)
 
 
 @router.callback_query(F.data == "hemp:top")

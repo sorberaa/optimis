@@ -154,6 +154,9 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY,
                 leaves INTEGER DEFAULT 0,
                 seed_stock INTEGER DEFAULT 5,
+                joints INTEGER DEFAULT 0,
+                last_joint_smoke TIMESTAMP,
+                last_bong_smoke TIMESTAMP,
                 level INTEGER DEFAULT 1,
                 xp INTEGER DEFAULT 0,
                 quality INTEGER DEFAULT 1,
@@ -174,6 +177,16 @@ async def init_db():
                 PRIMARY KEY (user_id, expedition)
             )
         """)
+
+        for col, col_def in [
+            ("joints", "INTEGER DEFAULT 0"),
+            ("last_joint_smoke", "TIMESTAMP"),
+            ("last_bong_smoke", "TIMESTAMP")
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE user_hemp ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass
 
         # Добавим колонки декораций и бонусов в users если их ещё нет
         for col, col_def in [
@@ -229,7 +242,8 @@ async def init_db():
             # Предметы и улучшения конопляной фермы
             ("🌱 Набор семян", "10 семян для посадки грядок", 25, "hemp_item", "seeds"),
             ("🧪 Удобрение", "Повышает качество и цену следующего сбора урожая", 100, "hemp_item", "fertilizer"),
-            ("🏠 Теплица", "Навсегда открывает дополнительную грядку, максимум 4", 300, "hemp_item", "greenhouse")
+            ("🏠 Теплица", "Навсегда открывает дополнительную грядку, максимум 4", 300, "hemp_item", "greenhouse"),
+            ("💧 Бонг", "Покурить за 2 листа вместо 3 у косяка", 250, "hemp_item", "bong")
         ]
 
         async with db.execute("SELECT COUNT(*) FROM shop_items") as cursor:
@@ -923,6 +937,115 @@ async def harvest_hemp(user_id: int) -> tuple[bool, int, str, Dict[str, Any]]:
         })
         return True, amount, "Урожай собран!", hemp
 
+async def craft_joint(user_id: int) -> tuple[bool, str, Dict[str, Any]]:
+    """Скрутить один косяк за три листа."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await db.rollback()
+            return False, "Открой коноплянку командой /hemp.", {}
+
+        hemp = dict(row)
+        if hemp["leaves"] < 3:
+            await db.rollback()
+            return False, "Нужно 3 🌿 для косяка.", hemp
+
+        await db.execute(
+            "UPDATE user_hemp SET leaves = leaves - 3, joints = joints + 1 WHERE user_id = ?",
+            (user_id,)
+        )
+        await db.commit()
+        hemp["leaves"] -= 3
+        hemp["joints"] += 1
+        return True, "Косяк скручен.", hemp
+
+async def smoke_joint(user_id: int) -> tuple[bool, str, Dict[str, Any]]:
+    """Выкурить один скрученный косяк."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await db.rollback()
+            return False, "Открой коноплянку командой /hemp.", {}
+
+        hemp = dict(row)
+        if hemp["joints"] < 1:
+            await db.rollback()
+            return False, "Сначала скрути косяк: /craft.", hemp
+
+        now = datetime.now()
+        if hemp["last_joint_smoke"]:
+            try:
+                remaining = timedelta(minutes=5) - (now - datetime.fromisoformat(hemp["last_joint_smoke"]))
+                if remaining.total_seconds() > 0:
+                    await db.rollback()
+                    return False, f"Подожди {max(1, int(remaining.total_seconds() // 60) + 1)} мин.", hemp
+            except Exception:
+                pass
+
+        await db.execute(
+            "UPDATE user_hemp SET joints = joints - 1, last_joint_smoke = ? WHERE user_id = ?",
+            (now.isoformat(), user_id)
+        )
+        await db.execute(
+            "UPDATE users SET balance = balance + 10 WHERE user_id = ?",
+            (user_id,)
+        )
+        await db.commit()
+        hemp["joints"] -= 1
+        hemp["last_joint_smoke"] = now.isoformat()
+        return True, "Дунул на 10 🪙.", hemp
+
+async def smoke_bong(user_id: int) -> tuple[bool, str, Dict[str, Any]]:
+    """Выкурить из купленного бонга за два листа."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT quantity FROM user_inventory WHERE user_id = ? AND item_key = 'bong'", (user_id,)) as cursor:
+            bong = await cursor.fetchone()
+        if not bong or bong["quantity"] < 1:
+            await db.rollback()
+            return False, "Купи бонг в магазине.", {}
+
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await db.rollback()
+            return False, "Открой коноплянку командой /hemp.", {}
+
+        hemp = dict(row)
+        if hemp["leaves"] < 2:
+            await db.rollback()
+            return False, "Нужно 2 🌿 для бонга.", hemp
+
+        now = datetime.now()
+        if hemp["last_bong_smoke"]:
+            try:
+                remaining = timedelta(minutes=5) - (now - datetime.fromisoformat(hemp["last_bong_smoke"]))
+                if remaining.total_seconds() > 0:
+                    await db.rollback()
+                    return False, f"Подожди {max(1, int(remaining.total_seconds() // 60) + 1)} мин.", hemp
+            except Exception:
+                pass
+
+        await db.execute(
+            "UPDATE user_hemp SET leaves = leaves - 2, last_bong_smoke = ? WHERE user_id = ?",
+            (now.isoformat(), user_id)
+        )
+        await db.execute(
+            "UPDATE users SET balance = balance + 12 WHERE user_id = ?",
+            (user_id,)
+        )
+        await db.commit()
+        hemp["leaves"] -= 2
+        hemp["last_bong_smoke"] = now.isoformat()
+        return True, "Дунул из бонга на 12 🪙.", hemp
+
 async def sell_hemp(user_id: int) -> tuple[bool, int, int, Dict[str, Any]]:
     """Продажа всей собранной конопли по рыночной цене качества."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1048,6 +1171,12 @@ async def buy_item(user_id: int, item_id: int) -> tuple[bool, str, Optional[Dict
                     "UPDATE user_hemp SET plots = MIN(4, plots + 1) WHERE user_id = ?",
                     (user_id,)
                 )
+            elif item["content"] == "bong":
+                await db.execute("""
+                    INSERT INTO user_inventory (user_id, item_key, title, quantity)
+                    VALUES (?, 'bong', ?, 1)
+                    ON CONFLICT(user_id, item_key) DO UPDATE SET quantity = 1
+                """, (user_id, item["title"]))
             else:
                 await db.execute("""
                     INSERT INTO user_inventory (user_id, item_key, title, quantity)
