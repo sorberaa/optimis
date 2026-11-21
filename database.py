@@ -566,13 +566,7 @@ async def claim_daily_bonus(user_id: int) -> tuple[bool, int, Optional[str], int
 async def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь администратором."""
     if not ADMIN_IDS:
-        # Если ADMIN_IDS в .env пуст, проверим, есть ли хоть один админ в БД
         async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT COUNT(*) FROM admins") as cur:
-                count = (await cur.fetchone())[0]
-            if count == 0:
-                # Первому пользователю временно разрешено
-                return True
             async with db.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,)) as cur:
                 return (await cur.fetchone()) is not None
 
@@ -586,7 +580,13 @@ async def is_admin(user_id: int) -> bool:
 async def is_superadmin(user_id: int) -> bool:
     """Проверяет, является ли пользователь главным админом (владельцем)."""
     if not ADMIN_IDS:
-        return True
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT is_superadmin FROM admins WHERE user_id = ?",
+                (user_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return bool(row and row[0] == 1)
     if user_id in ADMIN_IDS:
         return True
     async with aiosqlite.connect(DB_PATH) as db:

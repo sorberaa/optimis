@@ -279,6 +279,9 @@ async def cb_admin_list(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_add_info")
 async def cb_admin_add_info(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещен.", show_alert=True)
+        return
     text = (
         "➕ <b>Как назначить нового администратора:</b>\n\n"
         "1. Ответьте на сообщение нужного игрока командой:\n"
@@ -292,6 +295,9 @@ async def cb_admin_add_info(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_remove_info")
 async def cb_admin_remove_info(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещен.", show_alert=True)
+        return
     text = (
         "➖ <b>Как снять администратора:</b>\n\n"
         "1. Ответьте на сообщение админа командой:\n"
@@ -305,6 +311,9 @@ async def cb_admin_remove_info(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_economy_info")
 async def cb_admin_economy_info(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещен.", show_alert=True)
+        return
     text = (
         "💰 <b>Управление балансами игроков:</b>\n\n"
         "• <b>Выдать монеты:</b>\n"
@@ -320,6 +329,9 @@ async def cb_admin_economy_info(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_roulette_info")
 async def cb_admin_roulette_info(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещен.", show_alert=True)
+        return
     text = (
         "🎰 <b>ПРОВЕДЕНИЕ РУЛЕТОК И ТУРНИРОВ В ЧАТЕ:</b>\n\n"
         "<b>1. Игра по готовому списку от шефа:</b>\n"
@@ -343,6 +355,9 @@ async def cb_admin_roulette_info(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_item_info")
 async def cb_admin_item_info(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещен.", show_alert=True)
+        return
     text = (
         "🏷 <b>Добавление статуса в магазин:</b>\n\n"
         "Формат:\n"
@@ -387,6 +402,9 @@ async def cb_admin_stats(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_close")
 async def cb_admin_close(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещен.", show_alert=True)
+        return
     await callback.message.delete()
 
 # ==========================================

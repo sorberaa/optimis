@@ -173,6 +173,39 @@ class DatabaseOptimizationTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_empty_admin_list_denies_everyone(self):
+        async def run():
+            await database.init_db()
+            original_ids = database.ADMIN_IDS
+            database.ADMIN_IDS = []
+            try:
+                self.assertFalse(await database.is_admin(999999))
+                self.assertFalse(await database.is_superadmin(999999))
+            finally:
+                database.ADMIN_IDS = original_ids
+
+        asyncio.run(run())
+
+    def test_explicit_db_admin_is_allowed_but_not_superadmin(self):
+        async def run():
+            await database.init_db()
+            original_ids = database.ADMIN_IDS
+            database.ADMIN_IDS = []
+            try:
+                async with database.aiosqlite.connect(database.DB_PATH) as db:
+                    await db.execute(
+                        "INSERT OR REPLACE INTO admins "
+                        "(user_id, username, is_superadmin) VALUES (?, ?, 0)",
+                        (444, "Admin")
+                    )
+                    await db.commit()
+                self.assertTrue(await database.is_admin(444))
+                self.assertFalse(await database.is_superadmin(444))
+            finally:
+                database.ADMIN_IDS = original_ids
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()
