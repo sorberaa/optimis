@@ -8,21 +8,12 @@ from database import (
     collect_hemp,
     get_or_create_hemp,
     get_or_create_user,
-    get_top_hemp,
-    get_user_inventory,
     harvest_hemp,
     plant_hemp,
     sell_hemp,
 )
 
 router = Router()
-
-
-def progress_bar(value: int, maximum: int, width: int = 10) -> str:
-    if maximum <= 0:
-        return "⬜" * width
-    filled = min(width, max(0, int(value * width / maximum)))
-    return "🟩" * filled + "⬜" * (width - filled)
 
 
 def hemp_keyboard() -> InlineKeyboardMarkup:
@@ -34,50 +25,25 @@ def hemp_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="🧺 Собрать урожай", callback_data="hemp:harvest"),
             InlineKeyboardButton(text="💵 Продать всё", callback_data="hemp:sell")
-        ],
-        [
-            InlineKeyboardButton(text="🛍 Магазин фермы", callback_data="shop"),
-            InlineKeyboardButton(text="🏆 Топ фермеров", callback_data="hemp:top")
-        ],
-        [
-            InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")
         ]
     ])
 
 
-def hemp_status(hemp: dict, inventory: list) -> str:
-    level = hemp["level"]
-    xp_now = hemp["xp"]
-    required = level * 100
-    quality = hemp["quality"]
+def hemp_status(hemp: dict) -> str:
     active = hemp["active_plots"]
     plots = hemp["plots"]
-    inventory_text = ", ".join(
-        f"{item['title']} ×{item['quantity']}"
-        for item in inventory
-        if item["quantity"] > 0 and item["item_key"] in {"fertilizer", "greenhouse", "seeds", "water"}
-    ) or "пусто"
     return (
-        "╭━━━ 🌿 <b>КОНОПЛЯНКА</b> ━━━╮\n"
-        f"│ Урожай: <b>{hemp['leaves']}</b> 🌿\n"
-        f"│ Семена: <b>{hemp['seed_stock']}</b>  |  Качество: <b>{quality}/5</b>\n"
-        f"│ Грядки: <b>{active}/{plots}</b>\n"
-        "├━━━━━━━━━━━━━━━━━━━━\n"
-        f"│ Уровень <b>{level}</b>\n"
-        f"│ Опыт {progress_bar(xp_now, required)}  {xp_now}/{required}\n"
-        "╰━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🎒 <b>Улучшения:</b> {html.escape(inventory_text)}\n"
-        f"💰 Цена одной культуры: <b>{8 + (quality - 1) * 2}</b> 🪙\n\n"
-        "<i>Собирай дикие листья, сажай семена на грядки и продавай урожай за монеты.</i>"
+        f"🌿 У тебя: <b>{hemp['leaves']}</b>\n"
+        f"🌱 Семян: <b>{hemp['seed_stock']}</b>\n"
+        f"Грядки: <b>{active}/{plots}</b>"
     )
 
 
 async def show_hemp(message: Message, user_id: int, username: str | None, full_name: str):
     await get_or_create_user(user_id, username, full_name)
     hemp = await get_or_create_hemp(user_id)
-    inventory = await get_user_inventory(user_id)
     await message.answer(
-        hemp_status(hemp, inventory),
+        hemp_status(hemp),
         reply_markup=hemp_keyboard(),
         parse_mode="HTML"
     )
@@ -99,14 +65,12 @@ async def cmd_collect_hemp(message: Message):
     success, amount, notice, hemp = await collect_hemp(message.from_user.id)
     if success:
         await message.answer(
-            f"🌿 <b>{html.escape(notice)}</b>\n"
-            f"+{amount} 🌿 к запасам\n"
-            f"Всего в амбаре: <b>{hemp['leaves']}</b>",
+            f"🌿 Собрал коноплю\n+{amount} 🌿\nУ тебя: <b>{hemp['leaves']}</b>",
             reply_markup=hemp_keyboard(),
             parse_mode="HTML"
         )
     else:
-        await message.answer(f"⏳ <b>{html.escape(notice)}</b>", reply_markup=hemp_keyboard(), parse_mode="HTML")
+        await message.answer(f"⏳ {html.escape(notice)}", reply_markup=hemp_keyboard(), parse_mode="HTML")
 
 
 @router.message(Command("plant"))
@@ -114,8 +78,7 @@ async def cmd_plant_hemp(message: Message):
     await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
     success, notice, hemp = await plant_hemp(message.from_user.id)
     await message.answer(
-        f"{'🌱' if success else '⚠️'} <b>{html.escape(notice)}</b>\n"
-        f"Семян осталось: <b>{hemp['seed_stock']}</b>",
+        "🌱 Посадил коноплю" if success else f"⏳ {html.escape(notice)}",
         reply_markup=hemp_keyboard(),
         parse_mode="HTML"
     )
@@ -127,8 +90,7 @@ async def cmd_sell_hemp(message: Message):
     success, leaves, coins, hemp = await sell_hemp(message.from_user.id)
     if success:
         await message.answer(
-            f"💵 <b>Продажа завершена</b>\n"
-            f"Продано: <b>{leaves}</b> 🌿 за <b>{coins}</b> 🪙",
+            f"💵 Продал {leaves} 🌿 за {coins} 🪙",
             reply_markup=hemp_keyboard(),
             parse_mode="HTML"
         )
@@ -142,9 +104,7 @@ async def cmd_harvest_hemp(message: Message):
     success, amount, notice, hemp = await harvest_hemp(message.from_user.id)
     if success:
         await message.answer(
-            f"🧺 <b>{html.escape(notice)}</b>\n"
-            f"+{amount} 🌿 к запасам\n"
-            f"Всего в амбаре: <b>{hemp['leaves']}</b>",
+            f"🧺 Собрал урожай\n+{amount} 🌿\nУ тебя: <b>{hemp['leaves']}</b>",
             reply_markup=hemp_keyboard(),
             parse_mode="HTML"
         )
@@ -167,7 +127,7 @@ async def cb_hemp(callback: CallbackQuery):
 async def cb_hemp_collect(callback: CallbackQuery):
     success, amount, notice, hemp = await collect_hemp(callback.from_user.id)
     text = (
-        f"🌿 <b>{html.escape(notice)}</b>\n+{amount} 🌿\nВ амбаре: <b>{hemp['leaves']}</b>"
+        f"🌿 Собрал коноплю\n+{amount} 🌿\nУ тебя: <b>{hemp['leaves']}</b>"
         if success else f"⏳ <b>{html.escape(notice)}</b>"
     )
     await callback.message.edit_text(text, reply_markup=hemp_keyboard(), parse_mode="HTML")
@@ -178,8 +138,7 @@ async def cb_hemp_collect(callback: CallbackQuery):
 async def cb_hemp_plant(callback: CallbackQuery):
     success, notice, hemp = await plant_hemp(callback.from_user.id)
     text = (
-        f"{'🌱' if success else '⚠️'} <b>{html.escape(notice)}</b>\n"
-        f"Семян: <b>{hemp['seed_stock']}</b> | Грядки: <b>{hemp['active_plots']}/{hemp['plots']}</b>"
+        "🌱 Посадил коноплю" if success else f"⏳ <b>{html.escape(notice)}</b>"
     )
     await callback.message.edit_text(text, reply_markup=hemp_keyboard(), parse_mode="HTML")
     await callback.answer("Посажено!" if success else "Сделать не получилось.", show_alert=not success)
@@ -189,7 +148,7 @@ async def cb_hemp_plant(callback: CallbackQuery):
 async def cb_hemp_harvest(callback: CallbackQuery):
     success, amount, notice, hemp = await harvest_hemp(callback.from_user.id)
     text = (
-        f"🧺 <b>{html.escape(notice)}</b>\n+{amount} 🌿\nВ амбаре: <b>{hemp['leaves']}</b>"
+        f"🧺 Собрал урожай\n+{amount} 🌿\nУ тебя: <b>{hemp['leaves']}</b>"
         if success else f"⏳ <b>{html.escape(notice)}</b>"
     )
     await callback.message.edit_text(text, reply_markup=hemp_keyboard(), parse_mode="HTML")
@@ -200,7 +159,7 @@ async def cb_hemp_harvest(callback: CallbackQuery):
 async def cb_hemp_sell(callback: CallbackQuery):
     success, leaves, coins, hemp = await sell_hemp(callback.from_user.id)
     if success:
-        text = f"💵 <b>Продано {leaves} 🌿 за {coins} 🪙!</b>"
+        text = f"💵 Продал {leaves} 🌿 за {coins} 🪙"
     else:
         text = "🌿 В амбаре пока нет листьев."
     await callback.message.edit_text(text, reply_markup=hemp_keyboard(), parse_mode="HTML")
