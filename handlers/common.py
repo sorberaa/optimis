@@ -34,6 +34,7 @@ async def cmd_help(message: Message):
         f"• <code>/hemp</code> — карточка коноплянки\n"
         f"• <code>/collect</code> — собрать листья\n"
         f"• <code>/plant</code> — посадить семя\n"
+        f"• <code>/harvest</code> — собрать созревший урожай\n"
         f"• <code>/sell</code> — продать урожай\n"
         f"• <code>/shop</code> — магазин цифровых приколов\n"
         f"• <code>/profile</code> — профиль и баланс\n"

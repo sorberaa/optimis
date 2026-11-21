@@ -80,10 +80,46 @@ class DatabaseOptimizationTests(unittest.TestCase):
             harvest = await database.harvest_hemp(401)
             self.assertFalse(harvest[0])
 
+            import aiosqlite
+            async with aiosqlite.connect(database.DB_PATH) as db:
+                await db.execute(
+                    "UPDATE user_hemp SET harvest_at = ? WHERE user_id = ?",
+                    ("2000-01-01T00:00:00", 401)
+                )
+                await db.commit()
+            harvest = await database.harvest_hemp(401)
+            self.assertTrue(harvest[0])
+            hemp = await database.get_or_create_hemp(401)
+            self.assertGreater(hemp["leaves"], 0)
+
             sold = await database.sell_hemp(401)
             self.assertTrue(sold[0])
             after_sale = await database.get_user(401)
             self.assertGreater(after_sale["balance"], 500)
+
+        asyncio.run(run())
+
+    def test_hemp_shop_and_seed_pack(self):
+        async def run():
+            await database.init_db()
+            await database.get_or_create_user(402, "shopper", "Shopper")
+            await database.set_account_balance(402, 1000)
+
+            items = await database.get_shop_items()
+            hemp_items = {item["content"]: item for item in items if item["item_type"] == "hemp_item"}
+            self.assertIn("seeds", hemp_items)
+            self.assertIn("fertilizer", hemp_items)
+            self.assertIn("greenhouse", hemp_items)
+
+            success, _, item = await database.buy_item(402, hemp_items["seeds"]["id"])
+            self.assertTrue(success)
+            hemp = await database.get_or_create_hemp(402)
+            self.assertGreaterEqual(hemp["seed_stock"], 15)
+
+            success, _, item = await database.buy_item(402, hemp_items["greenhouse"]["id"])
+            self.assertTrue(success)
+            hemp = await database.get_or_create_hemp(402)
+            self.assertEqual(hemp["plots"], 2)
 
         asyncio.run(run())
 

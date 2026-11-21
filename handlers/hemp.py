@@ -53,7 +53,9 @@ def hemp_status(hemp: dict, inventory: list) -> str:
     active = hemp["active_plots"]
     plots = hemp["plots"]
     inventory_text = ", ".join(
-        f"{item['title']} ×{item['quantity']}" for item in inventory if item["quantity"] > 0
+        f"{item['title']} ×{item['quantity']}"
+        for item in inventory
+        if item["quantity"] > 0 and item["item_key"] in {"fertilizer", "greenhouse", "seeds", "water"}
     ) or "пусто"
     return (
         "╭━━━ 🌿 <b>КОНОПЛЯНКА</b> ━━━╮\n"
@@ -65,7 +67,7 @@ def hemp_status(hemp: dict, inventory: list) -> str:
         f"│ Опыт {progress_bar(xp_now, required)}  {xp_now}/{required}\n"
         "╰━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🎒 <b>Улучшения:</b> {html.escape(inventory_text)}\n"
-        f"💰 Цена одной культуры: <b>{10 + (quality - 1) * 2}</b> 🪙\n\n"
+        f"💰 Цена одной культуры: <b>{8 + (quality - 1) * 2}</b> 🪙\n\n"
         "<i>Собирай дикие листья, сажай семена на грядки и продавай урожай за монеты.</i>"
     )
 
@@ -134,8 +136,23 @@ async def cmd_sell_hemp(message: Message):
         await message.answer("🌿 В амбаре пока нет листьев для продажи.", reply_markup=hemp_keyboard(), parse_mode="HTML")
 
 
+@router.message(Command("harvest"))
+async def cmd_harvest_hemp(message: Message):
+    await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    success, amount, notice, hemp = await harvest_hemp(message.from_user.id)
+    if success:
+        await message.answer(
+            f"🧺 <b>{html.escape(notice)}</b>\n"
+            f"+{amount} 🌿 к запасам\n"
+            f"Всего в амбаре: <b>{hemp['leaves']}</b>",
+            reply_markup=hemp_keyboard(),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(f"⏳ <b>{html.escape(notice)}</b>", reply_markup=hemp_keyboard(), parse_mode="HTML")
+
+
 @router.callback_query(F.data == "hemp")
-@router.callback_query(F.data == "dragon")
 async def cb_hemp(callback: CallbackQuery):
     await show_hemp(
         callback.message,

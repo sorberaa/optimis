@@ -74,6 +74,7 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="hemp", description="🌿 Коноплянка"),
         BotCommand(command="collect", description="🌿 Собрать коноплю"),
         BotCommand(command="plant", description="🌱 Посадить семя"),
+        BotCommand(command="harvest", description="🧺 Собрать урожай"),
         BotCommand(command="sell", description="💵 Продать урожай"),
         BotCommand(command="bonus", description="🎁 Забрать ежедневный бонус"),
         BotCommand(command="top", description="🏆 Зал славы игроков"),

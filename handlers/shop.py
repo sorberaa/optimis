@@ -59,7 +59,7 @@ async def cb_shop_buy(callback: CallbackQuery):
         effect = f"✨ Эффект <b>{purchased_item['title']}</b> установлен в профиле."
     elif item_type == "taunt":
         effect = "🗣 Победная фраза будет появляться после ваших побед."
-    elif item_type in {"dragon_item", "hemp_item"}:
+    elif item_type == "hemp_item":
         effect = f"🌿 <b>{purchased_item['title']}</b> активирован в ферме."
     else:
         effect = "Покупка активирована."

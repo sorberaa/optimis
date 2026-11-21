@@ -153,7 +153,7 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS user_hemp (
                 user_id INTEGER PRIMARY KEY,
                 leaves INTEGER DEFAULT 0,
-                seed_stock INTEGER DEFAULT 3,
+                seed_stock INTEGER DEFAULT 5,
                 level INTEGER DEFAULT 1,
                 xp INTEGER DEFAULT 0,
                 quality INTEGER DEFAULT 1,
@@ -211,7 +211,6 @@ async def init_db():
             ("⚽ [Золотая Нога]", "Футбольный статус бомбардира", 220, "badge", "⚽ [Золотая Нога]"),
             ("🎰 [Фартовый]", "Статус везунчика клуба", 300, "badge", "🎰 [Фартовый]"),
             ("⚡ [Гроза Рулеток]", "Грозный титул в чат-играх", 450, "badge", "⚡ [Гроза Рулеток]"),
-            ("🐉 [Владыка Драконов]", "Великий титул повелителя драконов", 600, "badge", "🐉 [Владыка Драконов]"),
             ("💀 [Головорез]", "Опасный боевой статус в чате", 750, "badge", "💀 [Головорез]"),
             ("👑 [Шеф Gang]", "Высший авторитет Optimus Gang", 1000, "badge", "👑 [Шеф Gang]"),
 
@@ -228,17 +227,16 @@ async def init_db():
             ("🗣 Клич: «Шеф на связи»", "Фирменный панчлайн клуба Optimus", 300, "taunt", "🗣 «Optimus Gang на связи — остальные отдыхают! 🔥»"),
 
             # Предметы и улучшения конопляной фермы
-            ("🌱 Набор семян", "5 семян для посадки грядок", 50, "hemp_item", "seeds"),
-            ("💧 Полив улучшенный", "Следующий урожай дает на 25% больше листьев", 80, "hemp_item", "water"),
-            ("🧪 Удобрение", "Повышает качество сорта и цену продажи на следующий урожай", 120, "hemp_item", "fertilizer"),
-            ("🏠 Маленькая теплица", "Навсегда открывает одну дополнительную грядку", 500, "hemp_item", "greenhouse")
+            ("🌱 Набор семян", "10 семян для посадки грядок", 25, "hemp_item", "seeds"),
+            ("🧪 Удобрение", "Повышает качество и цену следующего сбора урожая", 100, "hemp_item", "fertilizer"),
+            ("🏠 Теплица", "Навсегда открывает дополнительную грядку, максимум 4", 300, "hemp_item", "greenhouse")
         ]
 
         async with db.execute("SELECT COUNT(*) FROM shop_items") as cursor:
             count = (await cursor.fetchone())[0]
 
         await db.execute(
-            "DELETE FROM shop_items WHERE item_type IS NULL OR item_type NOT IN ('badge', 'aura', 'taunt', 'dragon_item', 'hemp_item')"
+            "DELETE FROM shop_items WHERE item_type IS NULL OR item_type NOT IN ('badge', 'aura', 'taunt', 'hemp_item')"
         )
         for title, desc, price, i_type, content in shop_catalog:
             await db.execute(
@@ -778,7 +776,7 @@ async def get_or_create_hemp(user_id: int) -> Dict[str, Any]:
             return dict(await cursor.fetchone())
 
 async def collect_hemp(user_id: int) -> tuple[bool, int, str, Dict[str, Any]]:
-    """Сбор листьев с кулдауном для защиты от спама."""
+    """Быстрый сбор листьев с коротким кулдауном против спама."""
     import random
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -803,7 +801,7 @@ async def collect_hemp(user_id: int) -> tuple[bool, int, str, Dict[str, Any]]:
             except Exception:
                 pass
 
-        amount = 6 + hemp["level"] * 2 + random.randint(0, 3)
+        amount = 5 + hemp["level"] * 2 + random.randint(0, 4)
         xp = hemp["xp"] + 4
         level = hemp["level"]
         while xp >= level * 100:
@@ -838,7 +836,7 @@ async def plant_hemp(user_id: int) -> tuple[bool, str, Dict[str, Any]]:
             await db.rollback()
             return False, "Все грядки заняты. Дождись сбора урожая.", hemp
 
-        harvest_at = datetime.now() + timedelta(minutes=10)
+        harvest_at = datetime.now() + timedelta(minutes=3)
         await db.execute(
             """UPDATE user_hemp
                SET seed_stock = seed_stock - 1,
@@ -852,7 +850,7 @@ async def plant_hemp(user_id: int) -> tuple[bool, str, Dict[str, Any]]:
         hemp["seed_stock"] -= 1
         hemp["active_plots"] += 1
         hemp["harvest_at"] = harvest_at.isoformat()
-        return True, "Семя посажено! Урожай через 10 минут.", hemp
+        return True, "Семя посажено! Урожай созреет через 3 минуты.", hemp
 
 async def harvest_hemp(user_id: int) -> tuple[bool, int, str, Dict[str, Any]]:
     """Сбор созревшего урожая с применением улучшений."""
@@ -883,19 +881,6 @@ async def harvest_hemp(user_id: int) -> tuple[bool, int, str, Dict[str, Any]]:
             await db.rollback()
             return False, 0, f"Урожай созревает ещё примерно {minutes} мин.", hemp
 
-        multiplier = 1.0
-        async with db.execute(
-            "SELECT quantity FROM user_inventory WHERE user_id = ? AND item_key = 'water'",
-            (user_id,)
-        ) as cursor:
-            water = await cursor.fetchone()
-        if water and water[0] > 0:
-            multiplier += 0.25
-            await db.execute(
-                "UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_key = 'water'",
-                (user_id,)
-            )
-
         quality_gain = 0
         async with db.execute(
             "SELECT quantity FROM user_inventory WHERE user_id = ? AND item_key = 'fertilizer'",
@@ -909,8 +894,8 @@ async def harvest_hemp(user_id: int) -> tuple[bool, int, str, Dict[str, Any]]:
                 (user_id,)
             )
 
-        base_yield = 35 + hemp["level"] * 5
-        amount = int(base_yield * hemp["active_plots"] * multiplier)
+        base_yield = 30 + hemp["level"] * 5
+        amount = int(base_yield * hemp["active_plots"])
         quality = min(5, hemp["quality"] + quality_gain)
         xp = hemp["xp"] + 25 * hemp["active_plots"]
         level = hemp["level"]
@@ -955,7 +940,7 @@ async def sell_hemp(user_id: int) -> tuple[bool, int, int, Dict[str, Any]]:
             await db.rollback()
             return False, 0, 0, hemp
 
-        price = 10 + (hemp["quality"] - 1) * 2
+        price = 8 + (hemp["quality"] - 1) * 2
         coins = leaves * price
         await db.execute("UPDATE user_hemp SET leaves = 0 WHERE user_id = ?", (user_id,))
         await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (coins, user_id))
@@ -1013,7 +998,7 @@ async def buy_item(user_id: int, item_id: int) -> tuple[bool, str, Optional[Dict
                 await db.rollback()
                 return False, "Товар не найден или недоступен.", None
 
-        if item["item_type"] not in {"badge", "aura", "taunt", "dragon_item", "hemp_item"}:
+        if item["item_type"] not in {"badge", "aura", "taunt", "hemp_item"}:
             await db.rollback()
             return False, "Этот предмет недоступен в игровом магазине.", None
 
@@ -1040,12 +1025,6 @@ async def buy_item(user_id: int, item_id: int) -> tuple[bool, str, Optional[Dict
             await db.execute("UPDATE users SET aura = ? WHERE user_id = ?", (item["content"], user_id))
         elif item["item_type"] == "taunt":
             await db.execute("UPDATE users SET taunt = ? WHERE user_id = ?", (item["content"], user_id))
-        elif item["item_type"] == "dragon_item":
-            await db.execute("""
-                INSERT INTO user_inventory (user_id, item_key, title, quantity)
-                VALUES (?, ?, ?, 1)
-                ON CONFLICT(user_id, item_key) DO UPDATE SET quantity = quantity + 1
-            """, (user_id, item["content"], item["title"]))
         elif item["item_type"] == "hemp_item":
             await db.execute(
                 "INSERT OR IGNORE INTO user_hemp (user_id) VALUES (?)",
@@ -1053,12 +1032,20 @@ async def buy_item(user_id: int, item_id: int) -> tuple[bool, str, Optional[Dict
             )
             if item["content"] == "seeds":
                 await db.execute(
-                    "UPDATE user_hemp SET seed_stock = seed_stock + 5 WHERE user_id = ?",
+                    "UPDATE user_hemp SET seed_stock = seed_stock + 10 WHERE user_id = ?",
                     (user_id,)
                 )
             elif item["content"] == "greenhouse":
+                async with db.execute(
+                    "SELECT plots FROM user_hemp WHERE user_id = ?",
+                    (user_id,)
+                ) as cursor:
+                    hemp_row = await cursor.fetchone()
+                if not hemp_row or hemp_row[0] >= 4:
+                    await db.rollback()
+                    return False, "Все грядки уже открыты! Максимум: 4.", None
                 await db.execute(
-                    "UPDATE user_hemp SET plots = MIN(5, plots + 1) WHERE user_id = ?",
+                    "UPDATE user_hemp SET plots = MIN(4, plots + 1) WHERE user_id = ?",
                     (user_id,)
                 )
             else:
