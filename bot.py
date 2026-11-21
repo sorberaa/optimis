@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from aiohttp import web
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -37,9 +38,23 @@ async def start_health_server():
     return runner
 
 class AccountBanMiddleware(BaseMiddleware):
+    _cache = {}
+    _cache_ttl = 30
+
     async def __call__(self, handler, event, data):
         user = getattr(event, "from_user", None)
-        if user and await is_account_banned(user.id):
+        if not user:
+            return await handler(event, data)
+
+        now = time.monotonic()
+        cached = self._cache.get(user.id)
+        if cached is None or cached[0] + self._cache_ttl < now:
+            banned = await is_account_banned(user.id)
+            self._cache[user.id] = (now, banned)
+        else:
+            banned = cached[1]
+
+        if banned:
             if isinstance(event, Message):
                 await event.answer("⛔ Ваш игровой аккаунт заблокирован.")
             elif isinstance(event, CallbackQuery):
@@ -56,8 +71,10 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="list_game", description="📋 Запустить игру по списку"),
         BotCommand(command="profile", description="👤 Мой профиль и баланс"),
         BotCommand(command="shop", description="🛍 Магазин Optimus Gang"),
-        BotCommand(command="dragon", description="🐉 Вырастить дракона"),
-        BotCommand(command="dragon_name", description="🏷 Переименовать дракона"),
+        BotCommand(command="hemp", description="🌿 Коноплянка"),
+        BotCommand(command="collect", description="🌿 Собрать коноплю"),
+        BotCommand(command="plant", description="🌱 Посадить семя"),
+        BotCommand(command="sell", description="💵 Продать урожай"),
         BotCommand(command="bonus", description="🎁 Забрать ежедневный бонус"),
         BotCommand(command="top", description="🏆 Зал славы игроков"),
         BotCommand(command="admin", description="👑 Панель управления"),
@@ -100,7 +117,10 @@ async def main():
     logger.info("✅ Бот успешно подключен к Telegram API и готов к игре!")
 
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types()
+        )
     finally:
         await bot.session.close()
         await health_server.cleanup()

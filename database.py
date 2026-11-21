@@ -6,6 +6,11 @@ from config import DB_PATH, START_BALANCE, DAILY_BONUS, ADMIN_IDS
 async def init_db():
     """Инициализация таблиц базы данных и базовых товаров магазина."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("PRAGMA foreign_keys=ON")
+
         # Таблица игроков
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -145,6 +150,23 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_hemp (
+                user_id INTEGER PRIMARY KEY,
+                leaves INTEGER DEFAULT 0,
+                seed_stock INTEGER DEFAULT 3,
+                level INTEGER DEFAULT 1,
+                xp INTEGER DEFAULT 0,
+                quality INTEGER DEFAULT 1,
+                plots INTEGER DEFAULT 1,
+                active_plots INTEGER DEFAULT 0,
+                harvest_ready INTEGER DEFAULT 0,
+                last_collect TIMESTAMP,
+                last_harvest TIMESTAMP,
+                harvest_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS dragon_expedition_cooldowns (
                 user_id INTEGER NOT NULL,
                 expedition TEXT NOT NULL,
@@ -167,6 +189,18 @@ async def init_db():
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
             except Exception:
                 pass
+
+        # Индексы для основных выборок и проверок состояния.
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_balance ON users(balance DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_wins ON users(wins DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_duels_status_chat ON duels(status, chat_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_duels_players ON duels(creator_id, opponent_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_roulette_chat_status ON roulettes(chat_id, status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_roulette_players_roll ON roulette_players(roulette_id, score DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id, purchased_at DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_inventory_user ON user_inventory(user_id, item_key)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_dragon_expiry ON dragon_expedition_cooldowns(user_id, expedition)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_hemp_level ON user_hemp(level DESC, xp DESC)")
 
         # Товары в магазине: ТОЛЬКО виртуальные приколы внутри бота
         # Пересоздадим базовый ассортимент если пусто или устарело
@@ -193,18 +227,18 @@ async def init_db():
             ("🗣 Клич: «Удача со мной!»", "Победная фраза везунчика", 200, "taunt", "🗣 «Удача любит дерзких, а не пугливых! 😎»"),
             ("🗣 Клич: «Шеф на связи»", "Фирменный панчлайн клуба Optimus", 300, "taunt", "🗣 «Optimus Gang на связи — остальные отдыхают! 🔥»"),
 
-            # Предметы для дракона
-            ("🥩 Стейк из виверны", "Восстанавливает +50 энергии и +30 XP дракону", 30, "dragon_item", "steak"),
-            ("🧪 Зелье бодрости", "Мгновенно восполняет 100% энергии дракона", 60, "dragon_item", "potion"),
-            ("✨ Кристалл эволюции", "Дарует дракону сразу +150 очков опыта", 120, "dragon_item", "crystal"),
-            ("🛡️ Оберег удачи", "На одну экспедицию повышает шанс успеха и найденную добычу", 200, "dragon_item", "amulet")
+            # Предметы и улучшения конопляной фермы
+            ("🌱 Набор семян", "5 семян для посадки грядок", 50, "hemp_item", "seeds"),
+            ("💧 Полив улучшенный", "Следующий урожай дает на 25% больше листьев", 80, "hemp_item", "water"),
+            ("🧪 Удобрение", "Повышает качество сорта и цену продажи на следующий урожай", 120, "hemp_item", "fertilizer"),
+            ("🏠 Маленькая теплица", "Навсегда открывает одну дополнительную грядку", 500, "hemp_item", "greenhouse")
         ]
 
         async with db.execute("SELECT COUNT(*) FROM shop_items") as cursor:
             count = (await cursor.fetchone())[0]
 
         await db.execute(
-            "DELETE FROM shop_items WHERE item_type IS NULL OR item_type NOT IN ('badge', 'aura', 'taunt', 'dragon_item')"
+            "DELETE FROM shop_items WHERE item_type IS NULL OR item_type NOT IN ('badge', 'aura', 'taunt', 'dragon_item', 'hemp_item')"
         )
         for title, desc, price, i_type, content in shop_catalog:
             await db.execute(
@@ -434,6 +468,7 @@ async def delete_account(user_id: int) -> bool:
         await db.execute("DELETE FROM duels WHERE creator_id = ? OR opponent_id = ?", (user_id, user_id))
         await db.execute("DELETE FROM purchases WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM user_inventory WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM user_hemp WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM user_dragons WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM dragon_expedition_cooldowns WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
@@ -660,21 +695,52 @@ async def accept_duel(duel_id: int, opponent_id: int, opponent_name: str) -> boo
         return True
 
 async def record_duel_result(duel_id: int, winner_id: Optional[int], is_draw: bool, creator_id: int, opponent_id: int, bet: int):
-    """Фиксирует результат дуэли в статистике игроков."""
+    """Атомарно фиксирует один единственный результат дуэли."""
     async with aiosqlite.connect(DB_PATH) as db:
-        if is_draw:
-            # Возврат ставок обоим игрокам
-            await db.execute("UPDATE users SET balance = balance + ?, draws = draws + 1, total_games = total_games + 1 WHERE user_id = ?", (bet, creator_id))
-            await db.execute("UPDATE users SET balance = balance + ?, draws = draws + 1, total_games = total_games + 1 WHERE user_id = ?", (bet, opponent_id))
-            await db.execute("UPDATE duels SET status = 'finished', winner_id = NULL WHERE id = ?", (duel_id,))
-        else:
-            loser_id = opponent_id if winner_id == creator_id else creator_id
-            # Победитель забирает банк (ставка * 2)
-            await db.execute("UPDATE users SET balance = balance + ?, wins = wins + 1, total_games = total_games + 1 WHERE user_id = ?", (bet * 2, winner_id))
-            await db.execute("UPDATE users SET losses = losses + 1, total_games = total_games + 1 WHERE user_id = ?", (loser_id,))
-            await db.execute("UPDATE duels SET status = 'finished', winner_id = ? WHERE id = ?", (winner_id, duel_id))
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute(
+            "SELECT status FROM duels WHERE id = ?",
+            (duel_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row or row[0] != "playing":
+            await db.rollback()
+            return False
 
-        await db.commit()
+        try:
+            if is_draw:
+                await db.execute(
+                    "UPDATE users SET balance = balance + ?, draws = draws + 1, total_games = total_games + 1 WHERE user_id = ?",
+                    (bet, creator_id)
+                )
+                await db.execute(
+                    "UPDATE users SET balance = balance + ?, draws = draws + 1, total_games = total_games + 1 WHERE user_id = ?",
+                    (bet, opponent_id)
+                )
+                await db.execute(
+                    "UPDATE duels SET status = 'finished', winner_id = NULL WHERE id = ?",
+                    (duel_id,)
+                )
+            else:
+                loser_id = opponent_id if winner_id == creator_id else creator_id
+                await db.execute(
+                    "UPDATE users SET balance = balance + ?, wins = wins + 1, total_games = total_games + 1 WHERE user_id = ?",
+                    (bet * 2, winner_id)
+                )
+                await db.execute(
+                    "UPDATE users SET losses = losses + 1, total_games = total_games + 1 WHERE user_id = ?",
+                    (loser_id,)
+                )
+                await db.execute(
+                    "UPDATE duels SET status = 'finished', winner_id = ? WHERE id = ?",
+                    (winner_id, duel_id)
+                )
+            await db.commit()
+            return True
+        except Exception:
+            await db.rollback()
+            raise
 
 async def get_top_players(limit: int = 10, by: str = "balance") -> List[Dict[str, Any]]:
     """Топ игроков по балансу или по количеству побед."""
@@ -690,6 +756,225 @@ async def get_top_players(limit: int = 10, by: str = "balance") -> List[Dict[str
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+# ==========================================
+# КОНОПЛЯНАЯ ФЕРМА В ЧАТЕ
+# ==========================================
+
+async def get_or_create_hemp(user_id: int) -> Dict[str, Any]:
+    """Получает карточку фермы пользователя или создает новую."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return dict(row)
+        await db.execute(
+            "INSERT INTO user_hemp (user_id) VALUES (?)",
+            (user_id,)
+        )
+        await db.commit()
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            return dict(await cursor.fetchone())
+
+async def collect_hemp(user_id: int) -> tuple[bool, int, str, Dict[str, Any]]:
+    """Сбор листьев с кулдауном для защиты от спама."""
+    import random
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await db.execute("INSERT INTO user_hemp (user_id) VALUES (?)", (user_id,))
+            async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+                row = await cursor.fetchone()
+
+        hemp = dict(row)
+        now = datetime.now()
+        last_collect = hemp["last_collect"]
+        if last_collect:
+            try:
+                remaining = timedelta(seconds=30) - (now - datetime.fromisoformat(last_collect))
+                if remaining.total_seconds() > 0:
+                    seconds = max(1, int(remaining.total_seconds()))
+                    await db.rollback()
+                    return False, 0, f"Следующий сбор через {seconds} сек.", hemp
+            except Exception:
+                pass
+
+        amount = 6 + hemp["level"] * 2 + random.randint(0, 3)
+        xp = hemp["xp"] + 4
+        level = hemp["level"]
+        while xp >= level * 100:
+            xp -= level * 100
+            level += 1
+
+        await db.execute(
+            "UPDATE user_hemp SET leaves = leaves + ?, xp = ?, level = ?, last_collect = ? WHERE user_id = ?",
+            (amount, xp, level, now.isoformat(), user_id)
+        )
+        await db.commit()
+        hemp.update({"leaves": hemp["leaves"] + amount, "xp": xp, "level": level, "last_collect": now.isoformat()})
+        return True, amount, "Конопля собрана!", hemp
+
+async def plant_hemp(user_id: int) -> tuple[bool, str, Dict[str, Any]]:
+    """Посадка семян на свободные грядки."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await db.execute("INSERT INTO user_hemp (user_id) VALUES (?)", (user_id,))
+            async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+                row = await cursor.fetchone()
+        hemp = dict(row)
+
+        if hemp["seed_stock"] <= 0:
+            await db.rollback()
+            return False, "Нет семян. Купи набор в магазине.", hemp
+        if hemp["active_plots"] >= hemp["plots"]:
+            await db.rollback()
+            return False, "Все грядки заняты. Дождись сбора урожая.", hemp
+
+        harvest_at = datetime.now() + timedelta(minutes=10)
+        await db.execute(
+            """UPDATE user_hemp
+               SET seed_stock = seed_stock - 1,
+                   active_plots = active_plots + 1,
+                   harvest_ready = 0,
+                   harvest_at = ?
+               WHERE user_id = ?""",
+            (harvest_at.isoformat(), user_id)
+        )
+        await db.commit()
+        hemp["seed_stock"] -= 1
+        hemp["active_plots"] += 1
+        hemp["harvest_at"] = harvest_at.isoformat()
+        return True, "Семя посажено! Урожай через 10 минут.", hemp
+
+async def harvest_hemp(user_id: int) -> tuple[bool, int, str, Dict[str, Any]]:
+    """Сбор созревшего урожая с применением улучшений."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await db.rollback()
+            return False, 0, "Сначала открой ферму.", {}
+
+        hemp = dict(row)
+        if hemp["active_plots"] <= 0:
+            await db.rollback()
+            return False, 0, "Грядки пустые. Посади семена.", hemp
+        if not hemp["harvest_at"]:
+            await db.rollback()
+            return False, 0, "Урожай еще не посажен.", hemp
+
+        now = datetime.now()
+        try:
+            remaining = datetime.fromisoformat(hemp["harvest_at"]) - now
+        except Exception:
+            remaining = timedelta(seconds=-1)
+        if remaining.total_seconds() > 0:
+            minutes = max(1, int(remaining.total_seconds() // 60))
+            await db.rollback()
+            return False, 0, f"Урожай созревает ещё примерно {minutes} мин.", hemp
+
+        multiplier = 1.0
+        async with db.execute(
+            "SELECT quantity FROM user_inventory WHERE user_id = ? AND item_key = 'water'",
+            (user_id,)
+        ) as cursor:
+            water = await cursor.fetchone()
+        if water and water[0] > 0:
+            multiplier += 0.25
+            await db.execute(
+                "UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_key = 'water'",
+                (user_id,)
+            )
+
+        quality_gain = 0
+        async with db.execute(
+            "SELECT quantity FROM user_inventory WHERE user_id = ? AND item_key = 'fertilizer'",
+            (user_id,)
+        ) as cursor:
+            fertilizer = await cursor.fetchone()
+        if fertilizer and fertilizer[0] > 0:
+            quality_gain = 1
+            await db.execute(
+                "UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_key = 'fertilizer'",
+                (user_id,)
+            )
+
+        base_yield = 35 + hemp["level"] * 5
+        amount = int(base_yield * hemp["active_plots"] * multiplier)
+        quality = min(5, hemp["quality"] + quality_gain)
+        xp = hemp["xp"] + 25 * hemp["active_plots"]
+        level = hemp["level"]
+        while xp >= level * 100:
+            xp -= level * 100
+            level += 1
+
+        await db.execute(
+            """UPDATE user_hemp
+               SET leaves = leaves + ?, quality = ?, xp = ?, level = ?,
+                   active_plots = 0, harvest_ready = 0, harvest_at = NULL,
+                   last_harvest = ?
+               WHERE user_id = ?""",
+            (amount, quality, xp, level, now.isoformat(), user_id)
+        )
+        await db.commit()
+        hemp.update({
+            "leaves": hemp["leaves"] + amount,
+            "quality": quality,
+            "xp": xp,
+            "level": level,
+            "active_plots": 0,
+            "harvest_ready": 0,
+            "harvest_at": None,
+        })
+        return True, amount, "Урожай собран!", hemp
+
+async def sell_hemp(user_id: int) -> tuple[bool, int, int, Dict[str, Any]]:
+    """Продажа всей собранной конопли по рыночной цене качества."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT * FROM user_hemp WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            await db.rollback()
+            return False, 0, 0, {}
+
+        hemp = dict(row)
+        leaves = hemp["leaves"]
+        if leaves <= 0:
+            await db.rollback()
+            return False, 0, 0, hemp
+
+        price = 10 + (hemp["quality"] - 1) * 2
+        coins = leaves * price
+        await db.execute("UPDATE user_hemp SET leaves = 0 WHERE user_id = ?", (user_id,))
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (coins, user_id))
+        await db.commit()
+        hemp["leaves"] = 0
+        return True, leaves, coins, hemp
+
+async def get_top_hemp(limit: int = 10) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT h.*, u.username, u.full_name, u.nickname
+               FROM user_hemp h
+               JOIN users u ON u.user_id = h.user_id
+               ORDER BY h.level DESC, h.xp DESC, h.leaves DESC
+               LIMIT ?""",
+            (limit,)
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
 
 # ==========================================
 # МАГАЗИН И ПОКУПКИ
@@ -728,7 +1013,7 @@ async def buy_item(user_id: int, item_id: int) -> tuple[bool, str, Optional[Dict
                 await db.rollback()
                 return False, "Товар не найден или недоступен.", None
 
-        if item["item_type"] not in {"badge", "aura", "taunt", "dragon_item"}:
+        if item["item_type"] not in {"badge", "aura", "taunt", "dragon_item", "hemp_item"}:
             await db.rollback()
             return False, "Этот предмет недоступен в игровом магазине.", None
 
@@ -761,6 +1046,27 @@ async def buy_item(user_id: int, item_id: int) -> tuple[bool, str, Optional[Dict
                 VALUES (?, ?, ?, 1)
                 ON CONFLICT(user_id, item_key) DO UPDATE SET quantity = quantity + 1
             """, (user_id, item["content"], item["title"]))
+        elif item["item_type"] == "hemp_item":
+            await db.execute(
+                "INSERT OR IGNORE INTO user_hemp (user_id) VALUES (?)",
+                (user_id,)
+            )
+            if item["content"] == "seeds":
+                await db.execute(
+                    "UPDATE user_hemp SET seed_stock = seed_stock + 5 WHERE user_id = ?",
+                    (user_id,)
+                )
+            elif item["content"] == "greenhouse":
+                await db.execute(
+                    "UPDATE user_hemp SET plots = MIN(5, plots + 1) WHERE user_id = ?",
+                    (user_id,)
+                )
+            else:
+                await db.execute("""
+                    INSERT INTO user_inventory (user_id, item_key, title, quantity)
+                    VALUES (?, ?, ?, 1)
+                    ON CONFLICT(user_id, item_key) DO UPDATE SET quantity = quantity + 1
+                """, (user_id, item["content"], item["title"]))
 
         await db.execute(
             "INSERT INTO purchases (user_id, item_id, item_title, content) VALUES (?, ?, ?, ?)",
@@ -1016,6 +1322,17 @@ async def link_roulette_player_user(
 async def finish_roulette(roulette_id: int, winner_id: int, winner_name: str):
     """Завершает рулетку и фиксирует победителя."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute(
+            "SELECT status FROM roulettes WHERE id = ?",
+            (roulette_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row or row[0] != "playing":
+            await db.rollback()
+            return False
+
         await db.execute(
             "UPDATE roulettes SET status = 'finished', winner_id = ?, winner_name = ? WHERE id = ?",
             (winner_id, winner_name, roulette_id)
@@ -1026,6 +1343,7 @@ async def finish_roulette(roulette_id: int, winner_id: int, winner_name: str):
                 (winner_id,)
             )
         await db.commit()
+        return True
 
 async def cancel_roulette(roulette_id: int) -> bool:
     """Отменяет рулетку и возвращает взносы всем участникам."""

@@ -644,7 +644,7 @@ async def cb_account_delete(callback: CallbackQuery):
         return
     await callback.message.edit_text(
         f"⚠️ <b>Удалить игровой аккаунт {html.escape(account.get('nickname') or account.get('full_name') or 'Игрок')}?</b>\n\n"
-        "Будут удалены баланс, дракон, покупки и игровые записи. Отменить это действие нельзя.",
+        "Будут удалены баланс, коноплянка, покупки и игровые записи. Отменить это действие нельзя.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"account_delete_confirm:{user_id}:{page}")],
             [InlineKeyboardButton(text="↩️ Не удалять", callback_data=f"account_view:{user_id}:{page}")]

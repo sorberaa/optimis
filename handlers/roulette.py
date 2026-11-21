@@ -1025,7 +1025,8 @@ async def run_roulette_game(bot: Bot, chat_id: int, roulette_id: int):
 
     if not active_scores:
         await bot.send_message(chat_id, "💀 <b>Все DQ! Игра без победителя.</b>", parse_mode="HTML")
-        await finish_roulette(roulette_id, 0, "Никто")
+        if await finish_roulette(roulette_id, 0, "Никто"):
+            await bot.send_message(chat_id, "Турнир закрыт.", parse_mode="HTML")
         return
 
     top_score = active_scores[0]["score"]
@@ -1044,7 +1045,9 @@ async def run_roulette_game(bot: Bot, chat_id: int, roulette_id: int):
     else:
         winner = active_scores[0]
 
-    await finish_roulette(roulette_id, winner["user_id"], winner["name"])
+    if not await finish_roulette(roulette_id, winner["user_id"], winner["name"]):
+        await bot.send_message(chat_id, "⚠️ Результат турнира уже был записан.", parse_mode="HTML")
+        return
 
     prize_str = roulette["prize"]
     prize_words = prize_str.split()

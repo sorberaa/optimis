@@ -23,7 +23,7 @@ async def cmd_shop(message: Message):
     text = (
         f"🛍 <b>Магазин игровых приколов {SHOP_NAME}</b>\n\n"
         f"💰 Баланс: <code>{user['balance']}</code> 🪙{badge_str}\n"
-        "Только цифровые штуки внутри бота: титулы, ауры, победные фразы и припасы для дракона. "
+        "Цифровые штуки внутри бота: титулы, ауры, победные фразы и улучшения коноплянки. "
         "Никаких физических товаров."
     )
     await message.answer(text, reply_markup=shop_keyboard(items), parse_mode="HTML")
@@ -38,7 +38,7 @@ async def cb_shop(callback: CallbackQuery):
     text = (
         f"🛍 <b>Магазин игровых приколов {SHOP_NAME}</b>\n\n"
         f"💰 Баланс: <code>{user['balance']}</code> 🪙{badge_str}\n"
-        "Только цифровые штуки внутри бота: титулы, ауры, победные фразы и припасы для дракона. "
+        "Цифровые штуки внутри бота: титулы, ауры, победные фразы и улучшения коноплянки. "
         "Никаких физических товаров."
     )
     await callback.message.edit_text(text, reply_markup=shop_keyboard(items), parse_mode="HTML")
@@ -59,8 +59,8 @@ async def cb_shop_buy(callback: CallbackQuery):
         effect = f"✨ Эффект <b>{purchased_item['title']}</b> установлен в профиле."
     elif item_type == "taunt":
         effect = "🗣 Победная фраза будет появляться после ваших побед."
-    elif item_type == "dragon_item":
-        effect = f"🎒 <b>{purchased_item['title']}</b> добавлен в припасы дракона."
+    elif item_type in {"dragon_item", "hemp_item"}:
+        effect = f"🌿 <b>{purchased_item['title']}</b> активирован в ферме."
     else:
         effect = "Покупка активирована."
 
@@ -83,7 +83,7 @@ async def cb_my_purchases(callback: CallbackQuery):
         f"🏷 Титул: {decorations['badge'] or 'не установлен'}\n"
         f"✨ Аура: {decorations['aura'] or 'не установлена'}\n"
         f"🗣 Победная фраза: {decorations['taunt'] or 'не установлена'}\n"
-        f"🐉 Припасы дракона: {inventory_text}"
+        f"🌿 Улучшения коноплянки: {inventory_text}"
     )
 
     text = (

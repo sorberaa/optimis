@@ -17,7 +17,7 @@ def main_menu_keyboard(is_chat: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🏆 Топ игроков", callback_data="top_balance")
         ],
         [
-            InlineKeyboardButton(text="🐉 Вырастить дракона", callback_data="dragon")
+            InlineKeyboardButton(text="🌿 Моя коноплянка", callback_data="hemp")
         ],
         [
             InlineKeyboardButton(text="📜 Правила и помощь", callback_data="help")
@@ -113,7 +113,7 @@ def profile_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="🎁 Забрать бонус", callback_data="bonus"),
             InlineKeyboardButton(text="🛍 В магазин", callback_data="shop"),
-            InlineKeyboardButton(text="🐉 Дракон", callback_data="dragon")
+            InlineKeyboardButton(text="🌿 Коноплянка", callback_data="hemp")
         ],
         [
             InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")

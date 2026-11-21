@@ -19,7 +19,7 @@ async def cmd_start(message: Message):
         f"🔥 <b>Клуб {SHOP_NAME}</b>\n\n"
         f"👤 {message.from_user.mention_html()} | 💰 Баланс: <code>{user['balance']}</code> 🪙\n\n"
         f"Игровой аккаунт автоматически привязан к Telegram ID <code>{message.from_user.id}</code>.\n"
-        f"Чат-игры, цифровой магазин и собственный дракон!\n"
+        f"Чат-игры, цифровой магазин и собственная коноплянка!\n"
         f"Выбирай действие ниже 👇"
     )
     await message.answer(text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
@@ -31,8 +31,10 @@ async def cmd_help(message: Message):
         f"• <code>/game</code> или <code>/roulette</code> — рулетка; после заполнения мест стартует админ\n"
         f"• <code>/list_game</code> — запустить игру по готовому списку\n"
         f"• <code>/duel</code> — дуэль 1 на 1\n"
-        f"• <code>/dragon</code> — вырастить дракона\n"
-        f"• <code>/dragon_name имя</code> — переименовать дракона\n"
+        f"• <code>/hemp</code> — карточка коноплянки\n"
+        f"• <code>/collect</code> — собрать листья\n"
+        f"• <code>/plant</code> — посадить семя\n"
+        f"• <code>/sell</code> — продать урожай\n"
         f"• <code>/shop</code> — магазин цифровых приколов\n"
         f"• <code>/profile</code> — профиль и баланс\n"
         f"• <code>/bonus</code> — забрать бонус дня\n"
@@ -47,7 +49,7 @@ async def cb_help(callback: CallbackQuery):
         f"• <code>/game</code> или <code>/roulette</code> — рулетка; после заполнения мест стартует админ\n"
         f"• <code>/list_game</code> — провести игру по готовому списку\n"
         f"• <code>/duel</code> — дуэль 1 на 1 в чате\n"
-        f"• <code>/dragon</code> — вырастить дракона\n"
+        f"• <code>/hemp</code> — карточка коноплянки\n"
         f"• <code>/shop</code> — магазин цифровых приколов\n"
         f"• <code>/bonus</code> — ежедневный бонус"
     )
